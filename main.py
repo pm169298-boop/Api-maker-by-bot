@@ -96,7 +96,8 @@ from werkzeug.exceptions import HTTPException
 from flask.json.provider import DefaultJSONProvider
 
 # OPTIONAL ENV: fill these values directly for a private, server-only deployment.
-CONFIG = {'BOOTSTRAP_V4151_EMOJI': True,
+CONFIG = {
+    "BOOTSTRAP_V4171_CHAT_URLS": True,'BOOTSTRAP_V4151_EMOJI': True,
  'BOOTSTRAP_V415_CONTROLS': True,
  'AUTO_WORKER': True,
  'LOCK_OWNER_CONFIG': True,
@@ -110,8 +111,8 @@ CONFIG = {'BOOTSTRAP_V4151_EMOJI': True,
  'FIREBASE_BACKEND_EMAIL': 'Droid@gmail.com',
  'FIREBASE_BACKEND_PASSWORD': 'Droid0602',
  'FIREBASE_BACKEND_UID': '1egET0mDQXSXj2u5ZZxgxZlW3vd2',
- 'BOT_TOKEN': '8850790399:AAGRDRviB65ZWJ2x_S9ydkRYUte2ta_9I_w',
- 'BOT_USERNAME': 'Hahusuusbot',
+ 'BOT_TOKEN': '8351652662:AAE9kOGIU4m4QrJ7ixyc8n_4HpxDhY-KJ0s',
+ 'BOT_USERNAME': 'SR_free_api_bot',
  'SUPER_ADMIN_IDS': '8987478830',
  'BASE_URL': 'https://api-maker-by-bot.onrender.com',
  'SECRET_KEY': 'e7f5_cRfQ2CnMF4-pSuRBw4BzZfOnSD-IrfEIBzHFzad8_RA3l1g_EofHQcL4LKU',
@@ -155,7 +156,7 @@ def cfg(k):
     if k=='BASE_URL' and not value:value=os.environ.get('RENDER_EXTERNAL_URL','').rstrip('/')
     return value
 DEMO = "--demo" in sys.argv or os.environ.get("SRD_DEMO") == "1"
-VERSION = "4.17.0"
+VERSION = "4.17.1"
 LOG = logging.getLogger("srdark")
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 SUPER_IDS = {x.strip() for x in str(cfg("SUPER_ADMIN_IDS")).split(",") if x.strip().isdigit()}
@@ -164,6 +165,7 @@ FB_ADMIN_UIDS={x.strip() for x in str(cfg("FIREBASE_ADMIN_UIDS")).split(",") if 
 if DEMO:
     SUPER_IDS = {"10001"}
 DEFAULTS = {
+    "chat_keyed_receipts": False,
     "simple_customer_ui": False,
     "modern_controls": False, "key_style": "legacy", "safe_chat_receipts": False, "owner_approval_required": False, "web_unlock_minutes": 5,
     "starter_enabled": False, "starter_days": 10, "starter_daily": 100, "starter_rpm": 30,
@@ -287,6 +289,11 @@ def normalize(s):
         for k,j in list(s['outbox'].items()):
             if j.get('support_private') and not j.get('lease',0)>now():del s['outbox'][k]
         s['system']['v417_simple_ui']=True
+    flag=cfg('BOOTSTRAP_V4171_CHAT_URLS')
+    if (flag is True or str(flag).lower() in ('1','true','yes')) and not s['system'].get('v4171_chat_urls'):
+        s['settings'].update(chat_keyed_receipts=True,api_receipts_txt=False,safe_chat_receipts=True,default_header_only=False)
+        for u in s['users'].values():u.pop('receipt_mode',None)
+        s['system']['v4171_chat_urls']=True
     return s
 class Problem(Exception):
     def __init__(self, message, status=400, code="INVALID_REQUEST"):
@@ -443,14 +450,35 @@ def enqueue(s, chat, text, keyboard=None, kind="message", backup=None):
     # No silent dropping: stop accepting business writes if delivery backlog is excessive.
     require(len(s["outbox"])<=2000,"Notification backlog full; admin must run the scheduler.",503)
     return key
+def chat_url_credentials(a,result,title):
+    # Telegram text/entities, not HTML: ampersands stay literal and secrets stay in code entities.
+    text='';entities=[]
+    def add(value,kind=None):
+        nonlocal text
+        value=str(value);offset=text_units(text);text+=value
+        if kind:entities.append({'type':kind,'offset':offset,'length':text_units(value)})
+    icon='⏱' if a.get('is_trial') else '🎁' if a.get('is_starter') else '🔑'
+    add(icon+' '+title,'bold');add('\n\n'+a['name']+'\nExpires: '+iso(a['expires']))
+    if a.get('is_trial'):add('\nTotal request budget: '+str(a['trial_limit']))
+    else:add('\nLimits: '+str(a['daily'])+'/day · '+str(a['rpm'])+'/minute')
+    add('\n\n');add('Request URL — header required' if a.get('header_only') else 'Ready JSON URL','bold');add('\n')
+    add(result['request_url'] if a.get('header_only') else result['ready_url'],'code')
+    if a.get('header_only'):
+        add('\n\n');add('Authentication','bold');add('\n');add('X-API-Key: '+result['key'],'code')
+    add('\n\nKeep this key and URL private.')
+    if a.get('is_trial'):add(' Trial time and budget do not restart.')
+    require(text_units(text)<=4000,'Credential message is too long; shorten the public example value.',409)
+    return {'text':text,'entities':entities}
+
 def enqueue_api_receipt(s,uid,result,title):
     require(str(uid).isdigit() and bool(result.get('credential_text')),'Private Telegram receipt unavailable.')
     aid=result['id'];a=s['apis'].get(aid);require(a and (a['owner']==str(uid) or is_admin(uid,s)),'Receipt access denied.',403)
     mode=credential_delivery_mode(s,uid)
-    plaintext=safe_chat_credentials(result) if mode=='text' else result['credential_text']
+    linked=mode=='text' and s['settings'].get('chat_keyed_receipts',False)
+    plaintext=json.dumps(chat_url_credentials(a,result,title),ensure_ascii=False) if linked else safe_chat_credentials(result) if mode=='text' else result['credential_text']
     key=enqueue(s,uid,title+(' — private credential text.' if mode=='text' else ' — credentials are in the private TXT attachment.'),[[btn('My APIs','apis'),btn('Home','home')]],kind='api_receipt')
-    s['outbox'][key].update(receipt_enc=fernet().encrypt(plaintext.encode()).decode(),receipt_format=mode,receipt_api_id=aid,
-        receipt_key_hash=digest(result['key']),filename=aid+'.txt',priority=-2)
+    s['outbox'][key].update(receipt_enc=fernet().encrypt(plaintext.encode()).decode(),receipt_format='chat_url' if linked else mode,receipt_api_id=aid,
+        receipt_key_hash=digest(result['key']),filename=aid+'.txt',priority=-30 if linked else -2)
     return key
 
 def notify_admins(s, text, superonly=False):
@@ -1691,7 +1719,7 @@ def body():
     d=request.get_json(silent=True); require(isinstance(d,dict),"Valid JSON object required; duplicate keys/non-finite numbers are rejected."); validate_json_tree(d); return d
 
 @app.get("/health")
-def health(): return jsonify(ok=store is not None,version=VERSION,mode="demo" if DEMO else "production",build="PRIVATE-SIMPLE-417"),200 if store else 503
+def health(): return jsonify(ok=store is not None,version=VERSION,mode="demo" if DEMO else "production",build="PRIVATE-CHAT-4171"),200 if store else 503
 @app.get("/manage/state")
 @protected()
 def state_route(uid): return jsonify(public_state(store.read(),uid))
@@ -2853,7 +2881,17 @@ SIMPLE_COMMANDS=[('start','Home'),('create','API store'),('apis','My APIs'),('bu
 def simple_home(s,uid):
     u=s['users'][str(uid)]
     active=sum(a['owner']==str(uid) and a['active'] and a['expires']>now() and not (a.get('is_trial') and a.get('calls',0)>=a.get('trial_limit',0)) and not (a.get('total_limit') and a.get('calls',0)>=a['total_limit']) for a in s['apis'].values())
-    text='*💙 SR DARK*\n\n'+md('Hi, '+u['name']+'\nBalance: '+str(u['coins'])+' credits (coins)\nYour APIs: '+str(active)+' active')
+    display_name=' '.join(str(u.get('name') or 'Member').split()) or 'Member'
+    status='On hold' if u.get('wallet_hold') else 'Active' if u.get('active') else 'Activation needed'
+    text=('*💙 SR DARK*\n_API Dashboard_\n'
+          +'━━━━━━━━━━━━━━━━━━\n'
+          +'👤 *Name:* '+md(display_name)+'\n'
+          +'🆔 *ID:* '+code(str(uid))+'\n\n'
+          +'💰 *Balance:* '+md(format(u['coins'],',')+' credits')+'\n'
+          +'🔑 *Active APIs:* '+md(str(active))+'\n'
+          +'✅ *Status:* '+md(status)+'\n'
+          +'━━━━━━━━━━━━━━━━━━\n'
+          +'_Choose an option below_')
     rows=[[btn('API Store','create'),btn('My APIs','apis')],[btn('Buy Credits','buy','success'),btn('Wallet','wallet')],[btn('Invite & Earn','refs'),btn('Help','help')]]
     if not u.get('active'):rows.insert(0,[btn('Activate','activate','success')])
     if is_admin(uid,s):rows.append([btn('Admin','admin'),btn('Admin Panel','panel')])
@@ -3714,6 +3752,7 @@ def process_bot(s,update):
                 mode=action.split(':',1)[1];require(mode in ('txt','text','default'),'Invalid delivery format.');u['receipt_mode']=mode
             text=md('Credential delivery: '+credential_delivery_mode(s,uid)+'\nTXT is a secret attachment. Text uses non-clickable host/path and header instructions, not a keyed chat URL. Existing keys are not rotated by changing this preference.')
             rows=[[btn('Private TXT','receiptmode:txt'),btn('Safe chat text','receiptmode:text')],[btn('Use owner default','receiptmode:default'),btn('Home','home')]]
+            if s['settings'].get('chat_keyed_receipts'):text=md('Credential delivery: '+credential_delivery_mode(s,uid)+'\nChat includes a Ready JSON URL for query-enabled APIs. Link previews are disabled. Existing header-only APIs keep their protection. Existing keys are not rotated by changing delivery.')
             if focused_ui(s):
                 text+='\n'+md('Above: your admin receipt preference. Customers use the platform default: '+('TXT' if s['settings']['api_receipts_txt'] else 'safe text')+'.')
                 if uid in SUPER_IDS:rows.insert(0,[btn('Customers: TXT','deliverydefault:txt'),btn('Customers: text','deliverydefault:text')])
@@ -4407,7 +4446,11 @@ def drain(limit=4,budget=12,chat=None,job_id=None):
             elif v['kind']=='api_receipt':
                 plaintext=fernet().decrypt(v['receipt_enc'].encode())
                 payload={'chat_id':v['chat'],'caption':v['text'],'reply_markup':json.dumps({'inline_keyboard':v.get('keyboard') or []})}
-                if v.get('receipt_format')=='text':
+                if v.get('receipt_format')=='chat_url':
+                    body=json.loads(plaintext.decode());require(isinstance(body,dict) and isinstance(body.get('text'),str),'Invalid credential payload.')
+                    job_result=tg('sendMessage',{'chat_id':v['chat'],'text':body['text'],'entities':body['entities'],
+                                               'link_preview_options':{'is_disabled':True},'reply_markup':{'inline_keyboard':v.get('keyboard') or []}})
+                elif v.get('receipt_format')=='text':
                     text=plaintext.decode()
                     tg('sendMessage',{'chat_id':v['chat'],'text':text,'entities':[{'type':'pre','offset':0,'length':text_units(text)}],
                                      'link_preview_options':{'is_disabled':True},'reply_markup':{'inline_keyboard':v.get('keyboard') or []}})
@@ -4539,7 +4582,7 @@ def drain(limit=4,budget=12,chat=None,job_id=None):
                 cancel_promos(s,uid=v['chat']);return
             if v['kind']=='api_receipt' and api_code!=429 and (api_code!=400 and current['tries']>=5):
                 del s['outbox'][k]
-                soft_message(s,v['chat'],md('TXT delivery failed. Use My APIs → Rotate key to issue a new private file. No extra purchase is needed.'),[[btn('My APIs','apis')]])
+                soft_message(s,v['chat'],md('Credential delivery failed. Use My APIs → Rotate key to issue a new private receipt. No extra purchase is needed.' if v.get('receipt_format') in ('text','chat_url') else 'TXT delivery failed. Use My APIs → Rotate key to issue a new private file. No extra purchase is needed.'),[[btn('My APIs','apis')]])
                 return
             if api_code==400:
                 if current.get('edit_message_id') and getattr(error,'reason','')=='edit_unavailable':
@@ -4561,7 +4604,7 @@ def drain(limit=4,budget=12,chat=None,job_id=None):
                     return
                 if v['kind']=='api_receipt':
                     del s['outbox'][k]
-                    soft_message(s,v['chat'],md('TXT delivery failed. Use My APIs → Rotate key for a new private file.'),[[btn('My APIs','apis')]])
+                    soft_message(s,v['chat'],md('Credential delivery failed. Use My APIs → Rotate key for a new private receipt.' if v.get('receipt_format') in ('text','chat_url') else 'TXT delivery failed. Use My APIs → Rotate key for a new private file.'),[[btn('My APIs','apis')]])
                     return
                 if v['kind']=='sticker':
                     if s['settings'].get('welcome_sticker')==v.get('sticker'):
@@ -5110,14 +5153,16 @@ if DEMO and store: seed_demo()
 def run_worker():
     require(store is not None and not DEMO,'Configure production storage before starting the worker.',503)
     next_tick=0
+    flag=cfg('BOOTSTRAP_V4171_CHAT_URLS');fast=flag is True or str(flag).lower() in ('1','true','yes')
     while True:
         try:
+            requested=_WORKER_WAKE.is_set();_WORKER_WAKE.clear();sent=0
+            if fast:sent=drain(6,3) if requested or store.read().get('outbox') else 0
             if time.monotonic()>=next_tick:
                 def maintenance(s):
                     operational_tick(s);engagement_tick(s);prune_security_state(s);prune_approvals(s)
                 store.tx(maintenance);schedule_backup_async();next_tick=time.monotonic()+60
-            requested=_WORKER_WAKE.is_set();_WORKER_WAKE.clear()
-            sent=drain(6,3) if requested or store.read().get('outbox') else 0
+            if not fast:sent=drain(6,3) if requested or store.read().get('outbox') else 0
             if sent>=6:wake_worker()
         except Exception:
             LOG.warning('Worker operation failed; durable jobs retained for retry')
