@@ -1,48 +1,50 @@
 #!/usr/bin/env python3
-r"""PRIVATE CONFIGURED main.py — SR DARK 4.16.1, build PRIVATE-4161-R1.
-Contains existing server credentials: do not publish. No credentials were rotated.
-Deploy this file as main.py with start command: python main.py.
+r"""SR DARK 4.17.0 — complete application.
 
-# SR DARK v4.16.1 — visible command recovery and restart verification
+# SR DARK v4.17.0 — simple customer bot
 
-This PRIVATE build retains the existing Firebase Auth/RTDB configuration, bot token, owner allowlist, signing/encryption keys and namespace. No new environment values are required for the existing deployment URL. main.py and app.py are identical configured entrypoints. Developer: @DroidDeveloper.
+Private configured release. Developer: @DroidDeveloper.
 
-## What was observed
+## Customer menu
 
-After the corrected configured deployment, live health was HTTP 200, v4.16.0, the login setup error was absent, Firebase login was enabled, the scheduler was active and both Telegram's pending updates and the app outbox were empty. Menu delivery acknowledgements were recorded for existing message anchors. This is not proof that a Telegram client visibly displayed the old edited screen. The old webhook 403 was historical; it was not treated as a new outage. No private message content was read or logged during diagnosis.
+API Store | My APIs
+Buy Credits | Wallet
+Invite & Earn | Help
 
-## Recovery change
+Admins additionally see Admin and Admin Panel. Free starter and short demo remain inside API Store, not as extra home-screen rows. Usage and redeem are inside Wallet. No new pack prices or exchange rates were invented.
 
-- Typed /start, /admin or /menu can recover an existing menu by creating ONE fresh, visible text screen. No more than one recovery per account per 60 seconds; retries in that interval reuse the new screen.
-- Buttons, normal wizard input and support continue editing the canonical message. This is a deliberate exception to the previous always-reuse /start behavior, to recover screens hidden far back in a chat or locally removed in a client.
-- Old unleased navigation jobs are replaced with the latest screen. An in-flight job from before recovery cannot reinstall the old anchor. Financial/security receipts are not coalesced away.
-- /admin still requires the existing approved Telegram admin/owner identity. No role or owner change is included.
-- Bounded request/response metadata records timestamps, update IDs, a fixed command/category label and the acknowledged message ID/mode. No free-text support message, command arguments, password or key is added to this metadata.
+## Removed from customer workflows
 
-## Offline and restart behavior
+- Custom API creation, custom source editing and their direct callback/backend bypasses. Customers purchase owner-managed catalogue APIs instead.
+- General support conversation, history/inbox screens and owner-purchase-inquiry flow. Old callbacks cannot revive them. Old encrypted history is retained but not exposed; pending unsent support screens are cancelled. Already in-flight requests cannot be recalled.
+- The cluttered Buy/owner-preview journey. Buy Credits now shows the existing enabled coin pack amounts and Stars prices, with one Buy button per pack. Up to six packs per page.
 
-- Updates not yet delivered to an unavailable webhook are retried by Telegram, subject to Telegram's retention (normally no longer than 24 hours). Permanently lost/expired updates cannot be reconstructed.
-- Once this app accepts an update, its effects and reply jobs are committed transactionally. Firebase-backed pending replies survive an application restart. A crashed worker's lease can expire and be claimed again.
-- Temporary delivery failures retain reply jobs for backoff/retry. Blocked chats and permanent errors still follow their existing cancellation/error policy; successful delivery cannot be guaranteed in every case.
-- Ordinary pending menus are coalesced into the latest useful screen, not one notification for every old click. Receipts/invoices retain their separate policies. Expired payment approvals/invoices are not revived, and normal authorization/rate limits still apply.
-- Duplicate update/payment processing guards remain. Delivery is at-least-once: a crash after Telegram accepts a message but before acknowledgement can still duplicate that message; this does not mean repeating the purchase/credit operation.
-- Webhook setup retains drop_pending_updates=False. Do not manually clear pending updates, reset the database or change namespaces during a restart.
+A minimal /paysupport direct contact remains for payment/refund problems only, as referenced in invoices. It does not create a support thread or send an inquiry to the owner. It is not a home/menu support feature. Required billing support contact settings are preserved so Stars purchases are not broken.
 
-## Upload this package
+## Payments and preservation
 
-1. Replace BOTH main.py and app.py in the private service root, plus requirements.txt. Do not use an older generic archive.
-2. Build: `pip install -r requirements.txt`
-3. Start: `python main.py`
-4. Deploy and check `/health`: HTTP 200, `ok: true`, `version: 4.16.1`.
-5. Send /start once in the bot's private chat. The recovery should place a fresh menu near the bottom; then use its buttons. Use /admin from the configured admin account.
+Clicking Buy produces a Telegram Stars invoice. It does not credit the wallet. The selected amount/price is validated against the current pack. Only a validated successful payment credits the wallet; duplicate payment/update protection remains. Buy Credits does not invent rupee payments or a Stars/diamond exchange rate.
 
-Do not publish these configured files in a public repository or static website. Existing credentials are included. Database rules in the archive are provided, not automatically published. The assistant did not deploy this build, write production state, change the live webhook or send live test messages.
+Existing API keys, endpoints, usage, expiry, balances, orders, prices, header/query authentication policy and private CONFIG values are unchanged. Existing custom APIs continue serving; customers can no longer create new custom sources or rewrite existing custom data/upstreams. Admin source creation and management remain available.
 
-## Validation
+Normal buttons edit the current screen. The previous typed /start or /admin recovery and durable offline/retry handling remain. No welcome sticker was added. New simple welcome screens use text; existing saved media is not deleted and explicit admin previews remain available.
 
-767 automated tests passed (including 12 new recovery/restart tests), actual-browser local workflow with mocked transports passed, and isolated `python main.py`/Gunicorn v4.16.1 worker startup passed. The private no-ENV initialization check additionally verifies Firebase REST selection, health 200 and login availability with all networking/background threads disabled. These checks do not substitute for verifying the user's next deployment or seeing the actual Telegram screen.
+## Deploy
 
-All other v4.16 features remain: two-way encrypted support, priced owner inquiries without payment claims, automatic coin/Stars purchases, admin-only controls/delivery selector, safe credentials, owner approvals, same-message navigation, encrypted backups and Telegram-eligibility-aware emoji fallback.
+Replace your running app.py with the configured app.py supplied for this release. Requirements are unchanged.
+
+Build: pip install -r requirements.txt
+Start: python app.py
+
+main.py is an identical compatibility entrypoint if that is your hosting filename. Run one entrypoint, not both. No ENV values need to be entered for the existing configured deployment.
+
+After deployment, /health must report version 4.17.0 and build PRIVATE-SIMPLE-417 with ok=true. Then use /start. The simple UI migration applies once, keeps the same Firebase namespace and does not reset data or rotate keys. Do not clear pending Telegram updates.
+
+These files contain existing server credentials. Keep them private and out of public/static hosting or public repositories. Bundled rules are not automatically published. This release was not deployed by the assistant, and no production state write, invoice or message was sent in testing.
+
+## Checks
+
+786 automated tests passed: 767 compatibility/recovery/security/payment tests and 19 simple-mode tests. Local browser/webhook scenario passed for six-button home, priced credit purchase, invoice creation without premature credit, custom/support removal, admin approval, mobile layout and zero page JavaScript errors. Telegram/provider transports were mocked. Isolated Gunicorn startup/worker smoke passed. A separate no-ENV private initialization probe verifies configured Firebase REST and login availability with all networking and background threads blocked; it is not a real browser login or live-deployment verification.
 
 """
 from __future__ import annotations
@@ -93,65 +95,59 @@ from werkzeug.exceptions import HTTPException
 from flask.json.provider import DefaultJSONProvider
 
 # OPTIONAL ENV: fill these values directly for a private, server-only deployment.
-CONFIG = {'BOOTSTRAP_V4151_EMOJI': True,
- 'BOOTSTRAP_V415_CONTROLS': True,
- 'AUTO_WORKER': True,
- 'LOCK_OWNER_CONFIG': True,
- 'PROXY_KEEPALIVE': True,
- 'BOOTSTRAP_V414_SAFE_DELIVERY': True,
- 'BOOTSTRAP_DASHBOARD_WELCOME': True,
- 'BOOTSTRAP_VALIDATION_SOURCES': True,
- 'TELEGRAM_WEBHOOK_CONNECTIONS': 4,
- 'FIREBASE_ALLOW_SHARED_ACCOUNT': True,
- 'FIREBASE_ACCESS_MODE': 'rest',
- 'FIREBASE_BACKEND_EMAIL': 'Droid@gmail.com',
- 'FIREBASE_BACKEND_PASSWORD': 'Droid0602',
- 'FIREBASE_BACKEND_UID': '1egET0mDQXSXj2u5ZZxgxZlW3vd2',
- 'BOT_TOKEN': '8850790399:AAGRDRviB65ZWJ2x_S9ydkRYUte2ta_9I_w',
- 'BOT_USERNAME': 'Hahusuusbot',
- 'SUPER_ADMIN_IDS': '8987478830',
- 'BASE_URL': 'https://api-maker-by-bot.onrender.com',
- 'SECRET_KEY': 'e7f5_cRfQ2CnMF4-pSuRBw4BzZfOnSD-IrfEIBzHFzad8_RA3l1g_EofHQcL4LKU',
- 'WEBHOOK_SECRET': 'FC-LGiosyjGNkGqif0RM62wWfSpQHg2Oo0qfoip9FKVtQ1A4YDjK2VwY35YSn1Ds',
- 'CRON_SECRET': 'GUUCUEN7PJ6MajZDLJzzON4LwUo-vW1BBSL0zU3WGoe-1gcDAuispkz58otXe-87',
- 'FIREBASE_PROJECT_ID': 'vps-bot-api-makerbckup',
- 'FIREBASE_WEB_CONFIG': {'apiKey': 'AIzaSyAlibQoi962M_JrsP-iVKHHl6K2bSbj8S4',
-                         'authDomain': 'vps-bot-api-makerbckup.firebaseapp.com',
-                         'databaseURL': 'https://vps-bot-api-makerbckup-default-rtdb.asia-southeast1.firebasedatabase.app',
-                         'projectId': 'vps-bot-api-makerbckup',
-                         'storageBucket': 'vps-bot-api-makerbckup.firebasestorage.app',
-                         'messagingSenderId': '302260354275',
-                         'appId': '1:302260354275:web:ae0ad26df6f5154f7419d6',
-                         'measurementId': 'G-5Y0LEE2HPJ'},
- 'INITIAL_LOG_CHANNEL': '-1004358894107',
- 'FIREBASE_DATABASE_URL': 'https://vps-bot-api-makerbckup-default-rtdb.asia-southeast1.firebasedatabase.app',
- 'FIREBASE_WEB_API_KEY': 'AIzaSyAlibQoi962M_JrsP-iVKHHl6K2bSbj8S4',
- 'FIREBASE_SUPER_ADMIN_UIDS': '1egET0mDQXSXj2u5ZZxgxZlW3vd2',
- 'FIREBASE_ADMIN_UIDS': '',
- 'FIREBASE_SERVICE_ACCOUNT': '/etc/secrets/firebase-service-account.json',
- 'FIREBASE_NAMESPACE': 'srdark_v4',
- 'SQLITE_PATH': 'data/srdark.sqlite3',
- 'S3_BUCKET': '',
- 'S3_ENDPOINT_URL': '',
- 'S3_REGION': 'auto',
- 'S3_ACCESS_KEY': '',
- 'S3_SECRET_KEY': '',
- 'BACKUP_DIR': 'data/backups',
- 'BACKUP_KEY': 'YQMBxEzc6rMCsaaPv4KwVI9CI_bbKY5PFRHR6CGm7to=',
- 'HTTP_API_RPM': 180,
- 'HTTP_GLOBAL_RPM': 1200,
- 'TRUST_PROXY_HOPS': 0,
- 'REDIS_URL': '',
- 'REDIS_PREFIX': 'srdark-v4',
- 'EXTRA_HOSTS': '',
- 'BOOTSTRAP_V416_FOCUSED_UI': True}
+CONFIG = {
+    "BOOTSTRAP_V417_SIMPLE_UI": True,
+    'BOOTSTRAP_V416_FOCUSED_UI': True,
+    "BOOTSTRAP_V415_CONTROLS": False,
+    "BOOTSTRAP_V4151_EMOJI": False,
+    "PROXY_KEEPALIVE": False, # private build reuses pinned TLS connections, never response data
+    "AUTO_WORKER": False, # private Render build enables; never runs on Vercel
+    "LOCK_OWNER_CONFIG": False, # private build pins owner IDs to CONFIG, not web/DB/env
+
+    "BOOTSTRAP_V414_SAFE_DELIVERY": False, # private edition: TXT receipts and owner alerts once
+    "BOOTSTRAP_DASHBOARD_WELCOME": False, # private edition: one-time requested dashboard/sticker removal
+    "BOOTSTRAP_VALIDATION_SOURCES": False, # private edition enables two safe offline validation sources once
+    "TELEGRAM_WEBHOOK_CONNECTIONS": 4,     # match small Render worker capacity; apply with --set-webhook
+    "FIREBASE_ALLOW_SHARED_ACCOUNT": False, # explicit opt-in: backend identity may also be an approved human admin
+    "FIREBASE_ACCESS_MODE": "rest",        # rest = Firebase Auth + rules; sdk = optional legacy Admin SDK
+    "FIREBASE_BACKEND_EMAIL": "",          # dedicated backend Auth account; NOT the human admin login
+    "FIREBASE_BACKEND_PASSWORD": "",       # private; fill locally, never in chat or a public repo
+    "FIREBASE_BACKEND_UID": "",            # exact dedicated backend Auth UID, also used in RTDB rules
+    "BOT_TOKEN": "", "BOT_USERNAME": "",  # username optional; verified via getMe at webhook setup
+    "SUPER_ADMIN_IDS": "",                 # comma-separated Telegram numeric IDs
+    "BASE_URL": "",                        # https://your-domain, no trailing slash
+    "SECRET_KEY": "",                      # generate: python app.py --new-secret
+    "WEBHOOK_SECRET": "",                  # 32+ chars: letters/digits/_/-
+    "CRON_SECRET": "",                     # 32+ random characters
+    "FIREBASE_PROJECT_ID": "",            # same project as Auth accounts, Web API key and RTDB
+    "FIREBASE_WEB_CONFIG": {},            # PUBLIC web metadata only; Analytics is not enabled
+    "INITIAL_LOG_CHANNEL": "",            # bootstrap for a new database; editable in Operations
+    "FIREBASE_DATABASE_URL": "",
+    "FIREBASE_WEB_API_KEY": "",            # public Web API key from the SAME Firebase project
+    "FIREBASE_SUPER_ADMIN_UIDS": "",       # comma-separated Authentication → Users UIDs
+    "FIREBASE_ADMIN_UIDS": "",             # optional additional, lower-privilege admin UIDs
+    "FIREBASE_SERVICE_ACCOUNT": "",        # optional legacy sdk mode only; NOT needed in rest mode
+    "FIREBASE_NAMESPACE": "srdark_v4",      # separate from legacy HTML data
+    "SQLITE_PATH": "data/srdark.sqlite3",   # Render persistent disk: /var/data/srdark.sqlite3
+    "S3_BUCKET": "",                       # optional independent backup (S3/R2)
+    "S3_ENDPOINT_URL": "", "S3_REGION": "auto",
+    "S3_ACCESS_KEY": "", "S3_SECRET_KEY": "",
+    "BACKUP_DIR": "data/backups",          # persistent disk for SQLite-only installs
+    "BACKUP_KEY": "",                      # optional Fernet key; otherwise derived from SECRET_KEY
+    # Admission limits are separate from subscription quotas. WAF/edge protection still required.
+    "HTTP_API_RPM": 180, "HTTP_GLOBAL_RPM": 1200,
+    "TRUST_PROXY_HOPS": 0,                  # only increase behind a VERIFIED, locked-down proxy
+    "REDIS_URL": "",                       # optional rediss:// for shared, atomic admission limits
+    "REDIS_PREFIX": "srdark-v4",             # separate installs should use separate prefixes
+    "EXTRA_HOSTS": "",                     # optional comma-separated exact production hostnames
+}
 def cfg(k):
     if k in ("SUPER_ADMIN_IDS","FIREBASE_SUPER_ADMIN_UIDS") and CONFIG.get("LOCK_OWNER_CONFIG") is True:return CONFIG.get(k,"")
     value=os.environ.get(k, CONFIG.get(k, ""))
     if k=='BASE_URL' and not value:value=os.environ.get('RENDER_EXTERNAL_URL','').rstrip('/')
     return value
 DEMO = "--demo" in sys.argv or os.environ.get("SRD_DEMO") == "1"
-VERSION = "4.16.1"
+VERSION = "4.17.0"
 LOG = logging.getLogger("srdark")
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 SUPER_IDS = {x.strip() for x in str(cfg("SUPER_ADMIN_IDS")).split(",") if x.strip().isdigit()}
@@ -160,6 +156,7 @@ FB_ADMIN_UIDS={x.strip() for x in str(cfg("FIREBASE_ADMIN_UIDS")).split(",") if 
 if DEMO:
     SUPER_IDS = {"10001"}
 DEFAULTS = {
+    "simple_customer_ui": False,
     "modern_controls": False, "key_style": "legacy", "safe_chat_receipts": False, "owner_approval_required": False, "web_unlock_minutes": 5,
     "starter_enabled": False, "starter_days": 10, "starter_daily": 100, "starter_rpm": 30,
     "starter_extend_price": 50, "starter_extend_days": 1, "starter_quota_price": 50, "starter_quota_add": 100, "custom_key_price": 50,
@@ -273,6 +270,15 @@ def normalize(s):
     flag=cfg('BOOTSTRAP_V416_FOCUSED_UI')
     if (flag is True or str(flag).lower() in ('1','true','yes')) and not s['system'].get('v416_focused_ui'):
         s['settings']['focused_bot_ui']=True;s['system']['v416_focused_ui']=True
+    flag=cfg('BOOTSTRAP_V417_SIMPLE_UI')
+    if (flag is True or str(flag).lower() in ('1','true','yes')) and not s['system'].get('v417_simple_ui'):
+        s['settings'].update(simple_customer_ui=True,focused_bot_ui=True,modern_controls=True,allow_custom=False)
+        for u in s['users'].values():
+            f=u.get('flow',{})
+            if f.get('step') in ('support_chat','support_reply','owner_quote'):u['flow']={}
+        for k,j in list(s['outbox'].items()):
+            if j.get('support_private') and not j.get('lease',0)>now():del s['outbox'][k]
+        s['system']['v417_simple_ui']=True
     return s
 class Problem(Exception):
     def __init__(self, message, status=400, code="INVALID_REQUEST"):
@@ -1051,6 +1057,7 @@ def create_api(s,uid,d):
     require(joined(s,uid),"Verify all required channel/group joins in the bot first.",403,"JOIN_REQUIRED")
     require(sum(a["owner"]==str(uid) for a in s["apis"].values())<st["max_apis"],"Maximum API slots reached.")
     cid=str(d.get("catalog_id", ""))
+    if simple_ui(s) and not is_admin(uid,s):require(bool(cid),'Choose an API from the store; custom creation is disabled.',403,'CUSTOM_DISABLED')
     if cid:
         src=s["catalog"].get(cid); require(src and src.get("enabled"),"Catalogue entry unavailable.")
         if src["mode"] in ("proxy","validation"): require(bool(src.get("example_value")),"Admin must save an example value for this catalogue source first.")
@@ -1100,6 +1107,7 @@ def api_action(s,uid,aid,action,d=None):
         if plan and plan.get('total'):a['total_limit']=a.get('total_limit',plan['total'])+plan['total']
         result={"message":"Renewed; today's usage is retained.","expires":a["expires"]}
     elif action=="edit":
+        if simple_ui(s) and not is_admin(uid,s) and a["mode"]!="catalog":require(set(d)<={"name"},"Custom source editing is disabled.",403,"CUSTOM_DISABLED")
         if a["mode"]=="catalog":
             name=str(d.get("name",a["name"])).strip(); require(1<=len(name)<=60,"Invalid name."); a["name"]=name
         else:
@@ -1675,7 +1683,7 @@ def body():
     d=request.get_json(silent=True); require(isinstance(d,dict),"Valid JSON object required; duplicate keys/non-finite numbers are rejected."); validate_json_tree(d); return d
 
 @app.get("/health")
-def health(): return jsonify(ok=store is not None,version=VERSION,mode="demo" if DEMO else "production",build="PRIVATE-4161-R1"),200 if store else 503
+def health(): return jsonify(ok=store is not None,version=VERSION,mode="demo" if DEMO else "production"),200 if store else 503
 @app.get("/manage/state")
 @protected()
 def state_route(uid): return jsonify(public_state(store.read(),uid))
@@ -2099,6 +2107,8 @@ def render_marketing(template,u,st,extra=None):
 def link_rows(links):return [[btn(item['label'],url=item['url'])] for item in links]
 
 def welcome_enqueue(s,uid,preview=False,keyboard=None):
+    if simple_ui(s) and not preview:
+        text,rows=simple_home(s,uid);key=enqueue(s,uid,text,keyboard if keyboard is not None else rows);nav_job(s,key,uid);return key
     u=s['users'][uid];st=s['settings']
     if focused_ui(s) and not preview and valid_nav(u.get('bot_nav')):
         text,rows=menu(s,uid);key=enqueue(s,uid,text,keyboard or rows);nav_job(s,key,uid);return key
@@ -2827,6 +2837,82 @@ def operations_logtest_route(uid):
     return jsonify(run_requested_log_check(r['job_id']))
 
 
+# Compact customer screens; legacy business records and admin tools are preserved.
+def simple_ui(s):return bool(s['settings'].get('simple_customer_ui'))
+
+SIMPLE_COMMANDS=[('start','Home'),('create','API store'),('apis','My APIs'),('buy','Buy credits'),('wallet','My balance'),('referral','Invite and earn'),('help','Help')]
+
+def simple_home(s,uid):
+    u=s['users'][str(uid)]
+    active=sum(a['owner']==str(uid) and a['active'] and a['expires']>now() and not (a.get('is_trial') and a.get('calls',0)>=a.get('trial_limit',0)) and not (a.get('total_limit') and a.get('calls',0)>=a['total_limit']) for a in s['apis'].values())
+    text='*💙 SR DARK*\n\n'+md('Hi, '+u['name']+'\nBalance: '+str(u['coins'])+' credits (coins)\nYour APIs: '+str(active)+' active')
+    rows=[[btn('API Store','create'),btn('My APIs','apis')],[btn('Buy Credits','buy','success'),btn('Wallet','wallet')],[btn('Invite & Earn','refs'),btn('Help','help')]]
+    if not u.get('active'):rows.insert(0,[btn('Activate','activate','success')])
+    if is_admin(uid,s):rows.append([btn('Admin','admin'),btn('Admin Panel','panel')])
+    return text,rows
+
+def credit_signature(pack):return digest(json.dumps({k:pack[k] for k in ('id','amount','stars','currency')},sort_keys=True))[:12]
+
+def simple_credits(s,uid,page=0):
+    packs=[p for p in s['settings']['purchase_packs'] if p['enabled'] and p['currency']=='coins']
+    pages=max(1,(len(packs)+5)//6);page=max(0,min(page,pages-1));part=packs[page*6:(page+1)*6]
+    text='*Buy Credits*\n\n'+md('Balance: '+str(s['users'][str(uid)]['coins'])+' credits (coins)\nChoose a pack. Pay securely with Telegram Stars.\nCredits are added after successful payment.')
+    rows=[]
+    for p in part:
+        text+='\n\n'+md(str(p['amount'])+' credits  •  '+str(p['stars'])+' Stars')
+        rows.append([btn('Buy '+str(p['amount'])+' credits · '+str(p['stars'])+' Stars','creditbuy:'+p['id']+':'+credit_signature(p),'success')])
+    if not packs:text+='\n\n'+md('No credit packs available yet.')
+    nav=[]
+    if page:nav.append(btn('Back','creditpage:'+str(page-1)))
+    if page+1<pages:nav.append(btn('More','creditpage:'+str(page+1)))
+    if nav:rows.append(nav)
+    rows.append([btn('Terms','terms'),btn('Home','home')]);return text,rows
+
+def simple_payment_help(s):
+    name=s['settings'].get('support_username','')
+    text='*Payment issue*\n'+md('For a payment or refund issue, contact '+('@'+name if name else 'the configured owner')+'. Share only your order ID; never share API keys, passwords or OTPs.')
+    rows=[]
+    if name:rows.append([btn('Payment contact',url='https://t.me/'+name)])
+    elif SUPER_IDS:rows.append([btn('Payment contact',url='tg://user?id='+sorted(SUPER_IDS)[0])])
+    rows.append([btn('Wallet','wallet'),btn('Home','home')]);return text,rows
+
+def simple_customer_action(s,uid,action,raw,cb):
+    if not simple_ui(s):return None
+    u=s['users'][uid]
+    if action in ('buy','ownerbuy','contactbuy') or action.startswith(('ownerbuy:','ownerpick:','ownerpack:','buy:')):
+        u['flow']={};return simple_credits(s,uid)
+    if action.startswith('creditpage:'):
+        value=action.split(':')[1];require(value.isdigit() and len(value)<=6,'Invalid page.');u['flow']={};return simple_credits(s,uid,int(value))
+    if action.startswith('creditbuy:'):
+        _,pid,quote=action.split(':',2)
+        p=next((p for p in s['settings']['purchase_packs'] if p['id']==pid and p['enabled'] and p['currency']=='coins'),None)
+        require(p and hmac.compare_digest(credit_signature(p),quote),'Pack changed. Open Buy Credits again.',409)
+        result=new_order(s,uid,pid);u['flow']={}
+        return md('Invoice ready for '+str(p['amount'])+' credits. Pay '+str(p['stars'])+' Stars in Telegram. Your balance changes after successful payment.'),[[btn('Wallet','wallet'),btn('Home','home')]]
+    if action=='wallet':
+        u['flow']={};text='*Wallet*\n\n'+md('Balance: '+str(u['coins'])+' credits (coins)')
+        if u.get('diamonds'):text+='\n'+md('Diamonds: '+str(u['diamonds']))
+        if u.get('wallet_hold'):text+='\n'+md('Wallet on hold. Use /paysupport for a payment issue.')
+        rows=[[btn('Buy Credits','buy','success'),btn('Redeem code','redeem')],[btn('My Usage','mystats'),btn('Home','home')]]
+        if u.get('diamonds') and s['settings']['diamond_coin_rate']>0:rows.insert(1,[btn('Convert diamonds','convert')])
+        return text,rows
+    if action in ('paysupport','contacthelp'):
+        u['flow']={};return simple_payment_help(s)
+    if action.startswith(('support','ownerrequest')) or u.get('flow',{}).get('step') in ('support_chat','support_reply','owner_quote'):
+        u['flow']={};return md('General support chat is no longer available. Use the menu below.'),[[btn('API Store','create'),btn('Buy Credits','buy')],[btn('Home','home')]]
+    if not is_admin(uid,s):
+        f=u.get('flow',{})
+        if f.get('draft',{}).get('mode') in ('static','proxy','validation') and action in ('','confirmcreate'):
+            u['flow']={};return md('Custom API creation is no longer available.'),[[btn('API Store','create')]]
+        if action in ('customcreate','newstatic','newproxy'):
+            u['flow']={};return md('Choose an API from the store. Custom API creation is not available.'),[[btn('API Store','create'),btn('Home','home')]]
+        if action.startswith('edit:'):
+            a=owned(s,uid,action.split(':',1)[1])
+            if a['mode']!='catalog':
+                u['flow']={};return md('Custom source editing is no longer available. Your existing API and key remain unchanged.'),[[btn('My APIs','apis'),btn('Home','home')]]
+    return None
+
+
 # Role-scoped help and Telegram command menus (no network inside transactions).
 USER_COMMANDS=[('contact','Ask the owner about buying/support'),('freeapi','One free 10-day starter API'),('redeem','Redeem a gift code'),('start','Open your dashboard'),('help','User help'),('trial','One-time API trial'),('buyapi','Choose API type and buy with coins'),('create','Open the API catalogue'),
     ('apis','Manage your APIs'),('stats','Your API statistics'),('referral','Invite and earn coins'),
@@ -2842,8 +2928,9 @@ OWNER_COMMANDS=[('support','Customer support inbox'),('approvals','Review pendin
 def commands_for(s,uid):
     admin=is_admin(uid,s) and not s['users'].get(str(uid),{}).get('blocked')
     pairs=(USER_COMMANDS if s['settings'].get('modern_controls') else [])+ADMIN_COMMANDS+(OWNER_COMMANDS if role(uid,s)=='superadmin' else []) if admin else USER_COMMANDS
+    if simple_ui(s):pairs=SIMPLE_COMMANDS+(ADMIN_COMMANDS+[(c,d) for c,d in OWNER_COMMANDS if c!='support'] if admin else [])
     if not focused_ui(s) and not admin:pairs=pairs+[('commands','All controls as buttons'),('delivery','Private credential delivery format')]
-    return [{'command':name,'description':'Prices and owner inquiry' if name=='buy' and focused_ui(s) else description} for name,description in dict(pairs).items()]
+    return [{'command':name,'description':'Buy credits with Stars' if name=='buy' and simple_ui(s) else 'Prices and owner inquiry' if name=='buy' and focused_ui(s) else description} for name,description in dict(pairs).items()]
 
 def queue_commands(s,uid,force=False):
     uid=str(uid);u=s['users'].get(uid)
@@ -2851,7 +2938,7 @@ def queue_commands(s,uid,force=False):
     commands=commands_for(s,uid);mark=digest(json.dumps(commands,sort_keys=True))
     if not force and u.get('command_menu_hash')==mark:return
     # Normal users inherit the public user-only list. Only replace a prior scoped menu.
-    if not force and not is_admin(uid,s) and not u.get('command_menu_hash'):return
+    if not force and not simple_ui(s) and not is_admin(uid,s) and not u.get('command_menu_hash'):return
     for k,v in list(s['outbox'].items()):
         if v.get('kind')=='commands' and v['chat']==uid:del s['outbox'][k]
     if len(s['outbox'])>=1900:return
@@ -2859,6 +2946,7 @@ def queue_commands(s,uid,force=False):
     s['outbox'][k].update(command_hash=mark,commands=commands,expires=now()+600,priority=1)
 
 def user_help(s,uid):
+    if simple_ui(s):return '*Help*\n'+md('API Store — choose an API and confirm its coin price.\nMy APIs — use and manage purchased APIs.\nBuy Credits — choose a pack and pay with Stars.\nInvite & Earn — earn referral coins.\n/freeapi — free starter; /trial — short demo.\n/paysupport — payment or refund issues only.\nKeep API keys private.'),[[btn('API Store','create'),btn('Buy Credits','buy')],[btn('Home','home')]]
     st=s['settings']
     text='*💙 User help*\n\n'+md('Getting started\n/start — your dashboard\n/trial or /demo — one-time timed API trial\n/verify — check all required channel/group joins\n/id — your Telegram ID\n\nAPIs\n/buyapi or /create — choose API type, preview and confirm its price\n/apis — view, edit, pause, renew or delete your APIs\n/stats — your usage and daily quota\n\nWallet and referrals\n/referral — your invite link and API referral estimates\n/wallet — coins, diamonds and available conversion\n/redeem CODE — claim a gift code once\n/buy — configured Telegram Stars packs\n/terms and /paysupport — purchase terms and support')
     text+='\n\n'+md(f"Trial: {st['trial_minutes']} minutes and {st['trial_requests']} total requests on an admin-approved trial source. One claim per Telegram account. Pausing, deleting and rotating keys do not restart it. No wallet debit.\n")
@@ -2903,6 +2991,7 @@ def dashboard_text(s,uid):
     return md(f"👋 Hello, {u['name']}!\n\n╭──〔 💙 API DASHBOARD 〕\n│ 👤 ID: {uid}\n│ 💰 Coins: {balance}\n│ 🎁 Referrals: {u.get('refs',0)}\n│ 🔑 Active APIs: {active}\n│ ⭐ Status: {status}\n╰────────────────\n\n[{'▰'*filled}{'▱'*(10-filled)}] {balance}/{goal} coins\n"+(f"Need {needed} coins for the lowest-priced coin plan." if needed else 'Ready to choose an API plan!')+'\n\nChoose source → plan → preview → buy.\nDeveloper: @DroidDeveloper')
 
 def menu(s,uid):
+    if simple_ui(s):return simple_home(s,uid)
     u=s['users'][uid]
     text=dashboard_text(s,uid) if s['settings'].get('welcome_dashboard') else md('💙 Welcome')
     rows=[[btn('🛒 Buy API','create','success'),btn('🔑 My APIs','apis')],
@@ -2947,7 +3036,12 @@ def bot_catalogue(s,uid,page=0):
     if page:nav.append(btn('← Previous','catalogpage:'+str(page-1)))
     if page+1<pages:nav.append(btn('Next →','catalogpage:'+str(page+1)))
     if nav:rows.append(nav)
-    if s['settings']['allow_custom'] or is_admin(uid,s):rows.append([btn('Custom API (advanced)','customcreate')])
+    if is_admin(uid,s) or (s['settings']['allow_custom'] and not simple_ui(s)):rows.append([btn('Custom API (advanced)','customcreate')])
+    if simple_ui(s):
+        free=[]
+        if s['settings']['starter_enabled']:free.append(btn('Free starter','starter'))
+        if s['settings']['trial_enabled']:free.append(btn('Short demo','trial'))
+        if free:rows.append(free)
     rows.append([btn('My APIs','apis'),btn('Home','home')])
     return text,rows
 
@@ -3268,6 +3362,7 @@ def support_thread(s,viewer,target,create=False):
     return threads[target]
 
 def support_append(s,sender,target,text,system=False):
+    require(not simple_ui(s),'General support chat is disabled.',403)
     thread=support_thread(s,sender,target,create=True)
     require(not thread['closed'],'Conversation closed. Reopen it first.',409)
     require(isinstance(text,str) and 1<=text_units(text)<=600,'Send text up to 600 UTF-16 units. Do not send passwords or API keys.')
@@ -3567,9 +3662,10 @@ def process_bot(s,update):
         if first in ('/stats','/stat') and is_admin(uid,s):action='adminstats'
         if first=='/stat' and not is_admin(uid,s):action='mystats'
         if first=='/support':action='supportinbox' if uid in SUPER_IDS else 'paysupport'
-        if action=='buy':action='ownerbuy'
+        if action=='buy' and not simple_ui(s):action='ownerbuy'
     if focused_ui(s) and not cb and first in ('/start','/admin','/menu') and action in ('home','admin'):recover_bot_screen(s,uid)
     if action=='home':u['bot_view']='home'
+    if simple_ui(s) and first in ('/support','/contact'):action='support_removed'
     if first=="/start":queue_commands(s,uid)
     rows=[[btn("Home","home")]]; text=""
     checkpoint=copy.deepcopy(s)
@@ -3584,8 +3680,11 @@ def process_bot(s,update):
             return True
         parameter_help={'createredeem':'COINS USES DAYS, for example: 50 1 7','revokeredeem':'The redeem record ID from Rewards & credits','addcredit':'USER_ID COINS UNIQUE_REFERENCE','addplan':'SOURCE_ID Name | COINS | DAYS | DAILY | RPM | TOTAL','setcampaign':'An existing campaign ID from the admin page'}
         if focused_ui(s) and u.get('flow',{}).get('step')=='support_chat' and (cb or raw.startswith('/')) and not action.startswith(('support','paysupport','contacthelp','contactbuy','owner')):u['flow']={}
-        handled_support=focused_support_action(s,uid,action,raw,cb) if focused_ui(s) else None
-        if handled_support is not None:
+        simple_result=simple_customer_action(s,uid,action,raw,cb)
+        handled_support=focused_support_action(s,uid,action,raw,cb) if focused_ui(s) and not simple_ui(s) else None
+        if simple_result is not None:
+            text,rows=simple_result
+        elif handled_support is not None:
             text,rows=handled_support;u['bot_view']='support' if u.get('flow',{}).get('step')=='support_chat' else 'supportinbox' if uid in SUPER_IDS and action.startswith(('support','paysupport')) else action.split(':')[0]
         elif command_button and action in parameter_help:
             actor(s,uid,admin=True);u['flow']={'step':'command_args','command':action,'t':now()}
@@ -3959,7 +4058,7 @@ def process_bot(s,update):
             text='*Confirm API plan*\n'+md(src['name']+' · '+plan['name']+'\n'+plan_summary(plan)+'\nYour personal key is bound to this source. Expiry starts on purchase. Accepted attempts count, including upstream failures.')
             if is_admin(uid,s):text+='\n'+md('Admin test: no coins charged.')
             rows=[[btn('Demo response','sourcepreview:'+cid)],[btn('Confirm purchase','confirmcreate','success'),btn('Other plans','catalog:'+cid)]]
-            if focused_ui(s):rows.insert(0,[btn('Ask owner · '+str(plan['price'])+' coins','ownerpick:'+cid+':'+pid)])
+            if focused_ui(s) and not simple_ui(s):rows.insert(0,[btn('Ask owner · '+str(plan['price'])+' coins','ownerpick:'+cid+':'+pid)])
         elif action.startswith("catalog:"):
             cid=action.split(":",1)[1]; c=s["catalog"].get(cid); require(c and c["enabled"],"Catalogue unavailable.")
             if c.get('plans'):
@@ -3970,7 +4069,7 @@ def process_bot(s,update):
                 u["flow"]={"step":"confirm","draft":{"catalog_id":cid,"name":c["name"],"quote_currency":api_price(s,c)[0],"quote_price":api_price(s,c)[1]},"t":now()}
                 currency,price=api_price(s,c);text=md("Create "+c["name"]+f"? Cost: {0 if is_admin(uid,s) else price} {currency}.\n"+referral_requirement(s,uid,c))
                 rows=[[btn("🔎 Demo response","sourcepreview:"+cid)],[btn("🛒 Confirm purchase","confirmcreate","success"),btn("Back","create")]]
-                if focused_ui(s):rows.insert(0,[btn('Ask owner · '+str(price)+' '+currency,'ownerpick:'+cid+':default')])
+                if focused_ui(s) and not simple_ui(s):rows.insert(0,[btn('Ask owner · '+str(price)+' '+currency,'ownerpick:'+cid+':default')])
         elif action.startswith('sourcepreview:'):
             cid=action.split(':',1)[1];source=s['catalog'].get(cid);require(source and source.get('enabled'),'Source unavailable.')
             text=md(source['name'])+'\n\n'+source_preview(source)
@@ -4004,6 +4103,7 @@ def process_bot(s,update):
             if a.get('plan_snapshot'):text+='\n'+md('Plan: '+a['plan_snapshot']['name']+' · '+plan_summary(a['plan_snapshot']))
             if a.get('total_limit'):text+='\n'+md(f"Total usage: {a['calls']}/{a['total_limit']}")
             rows=api_keyboard(a)
+            if simple_ui(s) and not is_admin(uid,s) and a['mode']!='catalog':rows=[[b for b in row if not str(b.get('callback_data','')).startswith('edit:')] for row in rows];rows=[row for row in rows if row]
             if is_admin(uid,s):
                 if not a.get('is_trial'):rows.insert(0,[btn('Edit limits / auth','apilimits:'+a['id'])])
                 rows.append([btn('All admin APIs','adminapis')])
@@ -4037,7 +4137,7 @@ def process_bot(s,update):
             rows.append([btn("Bot appearance","botstyle"),btn("Add source","addsource","success")])
             if role(uid,s)=="superadmin": rows.append([btn("Request backup","backup","success")])
             rows.append([btn('All buttons','commands:0'),btn('Broadcast','broadcast')])
-            if focused_ui(s) and uid in SUPER_IDS:rows.append([btn('Customer inbox','supportinbox')])
+            if focused_ui(s) and not simple_ui(s) and uid in SUPER_IDS:rows.append([btn('Customer inbox','supportinbox')])
             if uid in SUPER_IDS:rows.append([btn('Approvals','approvals'),btn('Force join','forcejoin')])
             rows.append([btn("All APIs / edit","adminapis"),btn("Admin help","adminhelp")])
             rows.append([btn("Home","home")])
@@ -4143,7 +4243,7 @@ def callback_edit_target(update,job):
     plain={'home','create','apis','refs','wallet','buy','help','developer','mystats','admin','adminstats','adminusers','adminlogs','adminrefs','operations','buttonicons','botstyle','trial','demo','customcreate','adminhelp','paysupport','terms','newstatic','newproxy','convert','redeem','sources','addsource','adminapis'}
     prefixes=('adminapis:','apilimits:','plan:','catalog:','catalogpage:','sourcepreview:','trialpick:','api:','rotatecheck:','deletecheck:','renewcheck:','user:','rename:','edit:','captureicon:')
     plain.update({'starter','starterconfirm','delivery','upgradeconfirm','approvals','forcejoin','joinconfirm','joinremoveconfirm','broadcast','contactbuy','contacthelp','supportinbox','ownerbuy','ownerrequest','deliverydefaultconfirm'})
-    prefixes+=('deliverydefault:','supportview:','supportopen:','supportclose:','supportpage:','supportinbox:','ownerbuy:','ownerpick:','ownerpack:','cmd:','commands:','receiptmode:','starterpick:','upgrades:','upgradepick:','review:','approve:','reject:','joinremove:','broadcastmode:','supportreply:')
+    prefixes+=('creditpage:','creditbuy:','deliverydefault:','supportview:','supportopen:','supportclose:','supportpage:','supportinbox:','ownerbuy:','ownerpick:','ownerpack:','cmd:','commands:','receiptmode:','starterpick:','upgrades:','upgradepick:','review:','approve:','reject:','joinremove:','broadcastmode:','supportreply:')
     if action not in plain and not action.startswith(prefixes):return None
     caption=bool(message.get('photo') or message.get('video'))
     if caption and text_units(job.get('text',''))>1024:return None
@@ -4238,6 +4338,7 @@ def drain(limit=4,budget=12,chat=None,job_id=None):
                 if v.get('lease',0)>=now():continue
                 if focused_ui(s) and any(other is not v and other.get('chat')==v['chat'] and other.get('lease',0)>now() for other in s['outbox'].values()):continue
                 u=s['users'].get(v['chat'])
+                if v.get('support_private') and simple_ui(s):del s['outbox'][k];continue
                 if v.get('support_private'):
                     target=v.get('support_target')
                     if not u or u.get('blocked') or (target and v['chat']!=target and v['chat'] not in SUPER_IDS) or (not target and v['chat'] not in SUPER_IDS):
@@ -4496,7 +4597,7 @@ def configure_webhook():
         _IDENTITY_CACHE.update(username=me["username"],until=now()+60)
     result=tg("setWebhook",{"url":str(cfg("BASE_URL")).rstrip("/")+"/telegram/webhook",
         "secret_token":str(cfg("WEBHOOK_SECRET")),"max_connections":connections,"allowed_updates":["message","callback_query","pre_checkout_query"],"drop_pending_updates":False})
-    tg('setMyCommands',{'scope':{'type':'default'},'commands':[{'command':c,'description':d} for c,d in USER_COMMANDS]})
+    tg('setMyCommands',{'scope':{'type':'default'},'commands':[{'command':c,'description':d} for c,d in (SIMPLE_COMMANDS if simple_ui(store.read()) else USER_COMMANDS)]})
     def scopes(state):
         for uid,u in state['users'].items():
             if uid.isdigit() and u.get('telegram_started') and (is_admin(uid,state) or u.get('command_menu_hash')):queue_commands(state,uid,force=True)
@@ -4983,7 +5084,10 @@ def seed_demo():
         s["outbox"]={}
         s["catalog"]["cat_weather"]={"id":"cat_weather","name":"Weather sample","mode":"static","data":{"city":"Patna","temperature":29,"condition":"Clear","sample":True},"url":"","param":"city","enabled":True}
         for uid,name,data in [("10001","Product catalogue",{"products":[{"id":1,"name":"Starter","price":199}]}),("10001","Service health",{"status":"healthy","region":"ap-south"}),("10002","My first endpoint",{"message":"Hello, world"})]:
-            create_api(s,uid,{"name":name,"data":data})
+            if simple_ui(s) and not is_admin(uid,s):
+                cid='cat_demo_'+uid;s['catalog'][cid]={'id':cid,'name':name,'mode':'static','data':data,'enabled':True}
+                create_api(s,uid,{'catalog_id':cid,'name':name})
+            else:create_api(s,uid,{"name":name,"data":data})
         # Clearly labelled demo-only activity for the interactive preview.
         for idx,a in enumerate(s["apis"].values()):
             a["calls"]=[236,84,31][idx]; a["used"]=[36,18,7][idx]
