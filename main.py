@@ -150,13 +150,16 @@ CONFIG = {
  'EXTRA_HOSTS': '',
  'BOOTSTRAP_V416_FOCUSED_UI': True,
  'BOOTSTRAP_V417_SIMPLE_UI': True}
+_BOT_RUNTIME={}
+_BOT_RUNTIME_LOCK=threading.RLock()
 def cfg(k):
+    if k in ('BOT_TOKEN','BOT_USERNAME','WEBHOOK_SECRET') and k in _BOT_RUNTIME:return _BOT_RUNTIME[k]
     if k in ("SUPER_ADMIN_IDS","FIREBASE_SUPER_ADMIN_UIDS") and CONFIG.get("LOCK_OWNER_CONFIG") is True:return CONFIG.get(k,"")
     value=os.environ.get(k, CONFIG.get(k, ""))
     if k=='BASE_URL' and not value:value=os.environ.get('RENDER_EXTERNAL_URL','').rstrip('/')
     return value
 DEMO = "--demo" in sys.argv or os.environ.get("SRD_DEMO") == "1"
-VERSION = "4.17.1"
+VERSION = "4.18.0"
 LOG = logging.getLogger("srdark")
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 SUPER_IDS = {x.strip() for x in str(cfg("SUPER_ADMIN_IDS")).split(",") if x.strip().isdigit()}
@@ -447,6 +450,7 @@ def enqueue(s, chat, text, keyboard=None, kind="message", backup=None):
     if focused_ui(s) and kind=='message' and any(marker in text for marker in ('Secure panel login','Sensitive action confirmation','GIFT_','Referral qualified','Welcome reward','Payment received','Refund processed')):s['outbox'][key]['receipt']=True
     if premium and kind in ('message','photo','engagement','opslog','admin_event','approval'):s['outbox'][key]['premium_emojis']=True
     if auto_icons:s['outbox'][key]['auto_emoji_buttons']=auto_icons
+    if s['system'].get('bot_connection'):s['outbox'][key]['bot_id']=state_bot_id(s)
     # No silent dropping: stop accepting business writes if delivery backlog is excessive.
     require(len(s["outbox"])<=2000,"Notification backlog full; admin must run the scheduler.",503)
     return key
@@ -648,6 +652,143 @@ def firebase_login_available():
     return bool(store and (getattr(store,'firebase_app',None) or getattr(store,'rest_client',None)))
 
 
+# Managed bot connection: encrypted at rest, never returned by state/export endpoints.
+def base_bot_config(key):
+    return os.environ.get(key,CONFIG.get(key,''))
+
+def managed_hook_secret(bot_id):
+    base=str(base_bot_config('WEBHOOK_SECRET'))
+    require(len(base)>=32,'Configure the private webhook signing secret first.',503)
+    return 'b'+str(bot_id)+'_'+hmac.new(base.encode(),('srd-bot:'+str(bot_id)).encode(),hashlib.sha256).hexdigest()
+
+def state_bot_id(s):
+    p=s.get('system',{}).get('bot_connection',{})
+    if p:return str(p['id'])
+    return str(base_bot_config('BOT_TOKEN')).split(':',1)[0]
+
+def load_bot_runtime(s):
+    p=s.get('system',{}).get('bot_connection')
+    with _BOT_RUNTIME_LOCK:
+        if p and p.get('revision',0)>_BOT_RUNTIME.get('revision',0):
+            try:
+                token=fernet().decrypt(p['token_enc'].encode()).decode()
+                valid=bool(re.fullmatch(r'[0-9]{5,20}:[A-Za-z0-9_-]{30,100}',token)) and token.split(':',1)[0]==str(p['id']) and digest(token)==p['token_fingerprint']
+                require(valid,'Stored bot connection is invalid; owner recovery required.',503)
+                _BOT_RUNTIME.update(revision=p['revision'],BOT_TOKEN=token,BOT_USERNAME=p['username'],WEBHOOK_SECRET=managed_hook_secret(p['id']))
+            except Problem:raise
+            except Exception:raise Problem('Stored bot connection could not be decrypted; keep the original backup/signing keys.',503) from None
+        _BOT_RUNTIME['checked_until']=time.monotonic()+2
+    return s
+
+def refresh_bot_runtime(force=False):
+    if store is not None and not DEMO and (force or _BOT_RUNTIME.get('checked_until',0)<=time.monotonic()):store.read()
+
+def valid_bot_webhook_secret(supplied):
+    if DEMO:return False
+    base=str(base_bot_config('WEBHOOK_SECRET'))
+    signed=re.fullmatch(r'b([0-9]{5,20})_[0-9a-f]{64}',supplied)
+    # Reject unauthenticated callers before any database read, including on cold starts.
+    if not (base and hmac.compare_digest(supplied,base) or signed and hmac.compare_digest(supplied,managed_hook_secret(signed[1]))):return False
+    refresh_bot_runtime()
+    if not hmac.compare_digest(supplied,str(cfg('WEBHOOK_SECRET'))):refresh_bot_runtime(force=True)
+    return hmac.compare_digest(supplied,str(cfg('WEBHOOK_SECRET')))
+
+def check_bot_update_binding(s):
+    if has_request_context() and request.path=='/telegram/webhook':
+        p=s['system'].get('bot_connection')
+        expected=managed_hook_secret(p['id']) if p else str(base_bot_config('WEBHOOK_SECRET'))
+        require(hmac.compare_digest(request.headers.get('X-Telegram-Bot-Api-Secret-Token',''),expected),'Webhook belongs to a different bot connection.',403,'FORBIDDEN')
+
+def bot_connection_public(s):
+    p=s['system'].get('bot_connection',{})
+    return {'username':p.get('username') or bot_username(s),'id':p.get('id'),
+        'revision':p.get('revision',0),'source':'encrypted panel setting' if p else 'hosting CONFIG / ENV',
+        'token_configured':bool(p or base_bot_config('BOT_TOKEN')),'token_mask':'••••••••',
+        'last_verified_at':p.get('verified_at',0),'last_connection_status':p.get('status','not checked in panel'),
+        'held_deliveries':sum(bool(j.get('bot_id')) and j['bot_id']!=state_bot_id(s) for j in s['outbox'].values())}
+
+def bot_token_call(token,method,payload=None):
+    require(re.fullmatch(r'[0-9]{5,20}:[A-Za-z0-9_-]{30,100}',str(token)),'Invalid bot token format.')
+    require(method in ('getMe','getWebhookInfo','setWebhook','deleteWebhook'),'Unsupported connection operation.')
+    require(not DEMO,'Bot connection changes are disabled in demo mode.',403)
+    try:
+        with outbound_http('POST','https://api.telegram.org/bot'+token+'/'+method,json=payload or {},timeout=(3,8),allow_redirects=False) as response:
+            data=response.json()
+            require(data.get('ok') is True,'Telegram rejected the bot connection request. Verify the token and try again.',502,'BOT_CONNECTION_REJECTED')
+            return data.get('result',{})
+    except Problem:raise
+    except Exception:raise Problem('Telegram connection could not be verified. No transport details or token are logged.',502,'BOT_CONNECTION_UNAVAILABLE') from None
+
+def verify_bot_token(token):
+    me=bot_token_call(token,'getMe')
+    require(me.get('is_bot') is True and type(me.get('id')) is int and str(me['id'])==token.split(':')[0] and re.fullmatch(r'[A-Za-z0-9_]{5,32}',str(me.get('username',''))),'Token did not identify a valid Telegram bot.',502)
+    return {'id':me['id'],'username':me['username']}
+
+def connect_panel_bot(uid,data):
+    s=store.read();actor(s,uid,superonly=True);check_web_session(s,uid,elevated=True)
+    require(data.get('confirm')=='CONNECT','Verify the bot and confirm CONNECT.')
+    revision=integer(data.get('revision'),'revision',0,10**9)
+    require(revision==s['system'].get('bot_connection',{}).get('revision',0),'Bot connection changed. Refresh and verify again.',409)
+    token=str(data.get('token') or cfg('BOT_TOKEN')).strip();me=verify_bot_token(token)
+    require(str(data.get('expected_bot_id'))==str(me['id']),'Verified bot identity changed. Verify again.',409)
+    previous_id=state_bot_id(s);previous_token=str(cfg('BOT_TOKEN'));switch=previous_id!=str(me['id'])
+    if switch:
+        require(data.get('disconnect_previous') is True,'Confirm disconnecting the previous bot before switching identities.')
+        require(not any(o.get('status')=='pending' and o.get('created',0)+86400>now() for o in s['orders'].values()),'Switching bots is blocked while recent payment orders are pending. Finish/reconcile them first; rotating the same bot token is allowed.',409)
+    base=str(cfg('BASE_URL')).rstrip('/');parsed=urllib.parse.urlsplit(base)
+    require(parsed.scheme=='https' and parsed.hostname and not parsed.username and not parsed.password and not parsed.query and not parsed.fragment and parsed.path in ('','/'),'Configure a public HTTPS BASE_URL first.',503)
+    connections=integer(cfg('TELEGRAM_WEBHOOK_CONNECTIONS'),'connections',1,16)
+    operation=secrets.token_hex(16);encrypted=fernet().encrypt(token.encode()).decode()
+    def save(state):
+        actor(state,uid,superonly=True);check_web_session(state,uid,elevated=True)
+        sy=state['system'];require(sy.get('bot_connection',{}).get('revision',0)==revision,'Connection changed. Refresh first.',409)
+        require(sy.get('bot_change_lease',{}).get('until',0)<=now(),'Another bot connection operation is running.',409)
+        require(not any(j.get('lease',0)>now() for j in state['outbox'].values()),'A Telegram delivery is in flight. Retry shortly; no credentials changed.',409)
+        if switch:
+            require(not any(o.get('status')=='pending' and o.get('created',0)+86400>now() for o in state['orders'].values()),'A payment order is pending. Bot switch blocked.',409)
+            history=sy.setdefault('bot_replay_history',{})
+            require(previous_id in history or len(history)<8,'Bot replay history limit reached. Owner maintenance is required before another identity switch.',409)
+            history[previous_id]={'updates':copy.deepcopy(state['updates']),'floor':sy.get('update_floor',-1),'last':sy.get('last_bot_update',0)}
+            incoming=history.pop(str(me['id']),{})
+            state['updates']=incoming.get('updates',{});sy.update(update_floor=incoming.get('floor',-1),last_bot_update=incoming.get('last',0))
+            for job in state['outbox'].values():job.setdefault('bot_id',previous_id)
+            for u in state['users'].values():
+                for key in ('bot_nav','bot_last_request','bot_last_response','nav_recovery_pending','command_menu_hash','join_proof'):u.pop(key,None)
+                u.update(telegram_started=False,telegram_blocked=False,flow={},promo_pending='')
+            sy.update(log_verified='',log_disabled=True)
+        sy['bot_change_lease']={'id':operation,'until':now()+120}
+        sy['bot_connection']={**me,'revision':revision+1,'token_enc':encrypted,'token_fingerprint':digest(token),'status':'saved; connecting','updated_at':now(),'verified_at':0,'updated_by':uid}
+        sy['bot_identity']={**me,'token_fingerprint':digest(token)}
+        audit(state,uid,'bot.connection.saved','@'+me['username'])
+        check_data_capacity(state)
+    store.tx(save);store.read() # Load only the committed encrypted profile; never put secrets in public settings.
+    with _IDENTITY_LOCK:_IDENTITY_CACHE.update(username=me['username'],until=now()+60)
+    connected=False;previous_disconnected=not switch and s['system'].get('bot_connection',{}).get('previous_disconnected',True)
+    try:
+        bot_token_call(token,'setWebhook',{'url':base+'/telegram/webhook','secret_token':managed_hook_secret(me['id']),
+            'max_connections':connections,'allowed_updates':['message','callback_query','pre_checkout_query'],'drop_pending_updates':False})
+        info=bot_token_call(token,'getWebhookInfo');connected=info.get('url')==base+'/telegram/webhook'
+        if connected and switch:
+            try:
+                old_info=bot_token_call(previous_token,'getWebhookInfo')
+                # Do not delete a hook belonging to another app. Never clear pending updates.
+                if old_info.get('url')==base+'/telegram/webhook':
+                    bot_token_call(previous_token,'deleteWebhook',{'drop_pending_updates':False})
+                    previous_disconnected=not bot_token_call(previous_token,'getWebhookInfo').get('url')
+                else:previous_disconnected=not old_info.get('url')
+            except Problem:previous_disconnected=False
+    except Problem:pass # Saved profile remains recoverable; reconnect uses it without revealing the token.
+    def finish(state):
+        sy=state['system'];p=sy.get('bot_connection',{})
+        require(p.get('revision')==revision+1 and sy.get('bot_change_lease',{}).get('id')==operation,'Connection operation superseded; inspect current status.',409)
+        p.update(status='connected' if connected else 'saved; reconnect required',verified_at=now() if connected else 0,previous_disconnected=previous_disconnected)
+        sy.pop('bot_change_lease',None)
+        audit(state,uid,'bot.connection.verified' if connected else 'bot.connection.pending','@'+me['username'])
+    store.tx(finish);wake_worker()
+    return {'ok':connected,'saved':True,'bot':me,'previous_disconnected':previous_disconnected,
+        'message':('Bot saved and webhook verified. Open @'+me['username']+' and send /start.' if connected else 'Token saved securely, but webhook connection is NOT verified. Use Reconnect current bot; do not assume it is working.')+(' Previous webhook could not be confirmed disconnected; stop the old runner and inspect its settings.' if not previous_disconnected else '')}
+
+
 class Store:
     """Small-install atomic state. Firebase transaction callbacks must have no network effects.
     Whole-state transactions intentionally prioritize simple cross-instance consistency over scale.
@@ -692,18 +833,18 @@ class Store:
     def read(self):
         if self.ref:
             value=self.ref.get()
-            return normalize(json.loads(value) if isinstance(value,str) else value)
-        with self.connect() as c: return normalize(json.loads(c.execute("SELECT payload FROM state WHERE id=1").fetchone()[0]))
+            return load_bot_runtime(normalize(json.loads(value) if isinstance(value,str) else value))
+        with self.connect() as c: return load_bot_runtime(normalize(json.loads(c.execute("SELECT payload FROM state WHERE id=1").fetchone()[0])))
     def tx(self, fn):
         if self.ref:
             result=[None]
             def update(s):
-                s=normalize(json.loads(s) if isinstance(s,str) else s); result[0]=fn(s)
+                s=load_bot_runtime(normalize(json.loads(s) if isinstance(s,str) else s)); result[0]=fn(s)
                 return json.dumps(s,ensure_ascii=False,allow_nan=False)
             self.ref.transaction(update); return result[0]
         with self.lock, self.connect() as c:
             c.execute("BEGIN IMMEDIATE")
-            s=normalize(json.loads(c.execute("SELECT payload FROM state WHERE id=1").fetchone()[0]))
+            s=load_bot_runtime(normalize(json.loads(c.execute("SELECT payload FROM state WHERE id=1").fetchone()[0])))
             result=fn(s)
             c.execute("UPDATE state SET payload=? WHERE id=1",(json.dumps(s,ensure_ascii=False,allow_nan=False),))
             return result
@@ -825,7 +966,7 @@ def admission_guard():
     # Cheap invalid-secret rejection protects Telegram and operator paths before Redis/DB.
     if path=="/telegram/webhook":
         supplied=request.headers.get("X-Telegram-Bot-Api-Secret-Token","")
-        if DEMO or not cfg("WEBHOOK_SECRET") or not hmac.compare_digest(supplied,str(cfg("WEBHOOK_SECRET"))):
+        if not valid_bot_webhook_secret(supplied):
             limiter.hit("bad-hook",ip,10,local_only=True)
             raise Problem("Invalid webhook secret.",403,"FORBIDDEN")
         limiter.hit("trusted-hooks","telegram",max(120,int(cfg("HTTP_GLOBAL_RPM") or 1200)))
@@ -1272,6 +1413,7 @@ def public_state(s,uid):
     result['membership']={'required':bool(s['settings']['force_join_channels']),'verified':joined(s,uid),
                           'channels':copy.deepcopy(s['settings']['force_join_channels'])}
     if superadmin:
+        result['bot_connection']=bot_connection_public(s)
         result['redeem_codes']=[{**{k:v for k,v in r.items() if k!='claims'},'claimed':len(r['claims'])} for r in s['redeem_codes'].values()]
         result['operations']={k:copy.deepcopy(s['settings'][k]) for k in OPS_KEYS}
         result['firebase_connection']={'project_id':str(cfg('FIREBASE_PROJECT_ID') or ''),'storage':store.kind,
@@ -1288,7 +1430,7 @@ def public_state(s,uid):
         result['notification_seen']=u.get('notification_seen',0);result['notification_seen_ids']=u.get('notification_seen_ids',[])
         result.update(users=[{k:v for k,v in u.items() if k!="flow"} | {"role":role(i,s)} for i,u in s["users"].items()],
           logs=sorted(s["logs"].values(),key=lambda x:x["t"],reverse=True)[:150], kv=s["kv"],
-          system={k:v for k,v in s["system"].items() if k not in ("backup_lease","bot_identity")},pending=len(s["outbox"]))
+          system={k:v for k,v in s["system"].items() if k not in ("backup_lease","bot_identity","bot_connection","bot_change_lease","bot_replay_history")},pending=len(s["outbox"]))
     return result
 
 # Upstream requests: exact admin allowlist + all DNS answers public + TLS to pinned IP.
@@ -1719,7 +1861,7 @@ def body():
     d=request.get_json(silent=True); require(isinstance(d,dict),"Valid JSON object required; duplicate keys/non-finite numbers are rejected."); validate_json_tree(d); return d
 
 @app.get("/health")
-def health(): return jsonify(ok=store is not None,version=VERSION,mode="demo" if DEMO else "production",build="PRIVATE-CHAT-4171"),200 if store else 503
+def health(): return jsonify(ok=store is not None,version=VERSION,mode="demo" if DEMO else "production",build="PRIVATE-BOT-PANEL-418"),200 if store else 503
 @app.get("/manage/state")
 @protected()
 def state_route(uid): return jsonify(public_state(store.read(),uid))
@@ -1744,6 +1886,29 @@ def api_action_route(uid,aid,action):
 @protected()
 def trial_route(uid):
     raise Problem('Trial claims are available only in the Telegram bot. Use /trial or /demo.',403,'BOT_ONLY')
+
+
+@app.get('/manage/bot-connection')
+@protected(superonly=True)
+def bot_connection_status_route(uid):
+    limiter.hit('bot-connection',uid,15)
+    s=store.read();result=bot_connection_public(s)
+    try:
+        token=str(cfg('BOT_TOKEN'));me=verify_bot_token(token);info=bot_token_call(token,'getWebhookInfo')
+        result.update(bot=me,webhook_connected=info.get('url')==str(cfg('BASE_URL')).rstrip('/')+'/telegram/webhook',pending_updates=info.get('pending_update_count',0),delivery_error_present=bool(info.get('last_error_message')),checked_at=now())
+    except Problem:result.update(webhook_connected=False,verification_unavailable=True)
+    return jsonify(result)
+
+@app.post('/manage/bot-connection')
+@protected(superonly=True,elevated=True)
+def bot_connection_route(uid):
+    limiter.hit('bot-connection',uid,15)
+    data=body();require(not set(data)-{'action','token','revision','expected_bot_id','disconnect_previous','confirm'},'Unsupported bot connection field.')
+    action=data.get('action');require(action in ('verify','connect'),'Choose Verify or Save & Connect.')
+    if action=='verify':
+        token=str(data.get('token') or cfg('BOT_TOKEN')).strip();me=verify_bot_token(token)
+        return jsonify(bot=me,revision=store.read()['system'].get('bot_connection',{}).get('revision',0),message='Identity verified only; nothing saved or connected.')
+    return jsonify(connect_panel_bot(uid,data))
 
 
 @app.post("/manage/admin/<kind>")
@@ -1931,6 +2096,7 @@ def find_payment_order(s,payload):
     return o
 
 def precheckout(s,q):
+    check_bot_update_binding(s)
     try:
         o=find_payment_order(s,q.get('invoice_payload'))
         require(str(q.get('from',{}).get('id'))==o['uid'],'This invoice belongs to another account.',403)
@@ -3311,6 +3477,9 @@ def web_approval_required(s,uid):
     if endpoint=='export_route' and request.method=='GET':return True
     if request.method!='POST':return False
     if endpoint in ('backup_route','restore_route'):return True
+    if endpoint=='bot_connection_route':
+        d=body();require(not set(d)-{'action','token','revision','expected_bot_id','disconnect_previous','confirm'},'Unsupported bot connection field.')
+        return d.get('action')=='connect' and not str(uid).startswith('fb:')
     if endpoint=='admin_route':return True
     if endpoint in ('operations_route','campaign_save_route','campaign_action_route','engagement_settings_route','payment_admin_route'):return True
     if endpoint=='api_action_route':
@@ -3607,6 +3776,7 @@ def start_embedded_worker():
 
 
 def process_bot(s,update):
+    check_bot_update_binding(s)
     update_id=str(update.get("update_id",""))
     require(update_id.isdigit() and len(update_id)<=19,"Invalid update.")
     system=s["system"]
@@ -4262,6 +4432,7 @@ def process_bot(s,update):
     return True
 
 def tg(method,payload=None,files=None):
+    refresh_bot_runtime()
     require(bool(cfg("BOT_TOKEN")),"Bot token not configured.",503)
     if DEMO: return {"ok":True}
     url="https://api.telegram.org/bot"+str(cfg("BOT_TOKEN"))+"/"+method
@@ -4355,10 +4526,12 @@ def drain(limit=4,budget=12,chat=None,job_id=None):
         def claim(s):
             wait_until[0]=None
             sy=s['system']
+            if sy.get('bot_change_lease',{}).get('until',0)>now():return
             if sy.get('telegram_retry_at',0)>now():return
             if sy.get('telegram_send_second')==now() and sy.get('telegram_send_count',0)>=15:return
             items=sorted(s['outbox'].items(),key=lambda kv:(kv[1].get('kind')=='engagement',kv[1].get('priority',0),kv[1]['t']))
             for k,v in items:
+                if v.get('bot_id') and v['bot_id']!=state_bot_id(s):continue
                 if job_id is not None and k!=job_id:continue
                 if chat is not None and (v['chat']!=chat or v.get('kind') not in interactive):continue
                 if v.get('kind') in ('joincheck','logverify','joinsetup','commands') and (v.get('expires',0)<=now() or not s['users'].get(v['chat']) or (s['users'][v['chat']].get('blocked') and v.get('kind')!='commands')):
@@ -4666,14 +4839,14 @@ def configure_webhook_route():
 def webhook():
     global _BOT_TIMINGS
     require(store is not None and not DEMO,"Webhook unavailable.",503)
-    require(hmac.compare_digest(request.headers.get("X-Telegram-Bot-Api-Secret-Token",""),str(cfg("WEBHOOK_SECRET"))),"Invalid webhook secret.",403)
+    require(valid_bot_webhook_secret(request.headers.get("X-Telegram-Bot-Api-Secret-Token","")),"Invalid webhook secret.",403)
     update=body()
     if update.get('pre_checkout_query'):
         # Direct Bot API webhook response avoids queue/network delay before Telegram's 10-second deadline.
         return jsonify(store.tx(lambda s:precheckout(s,update['pre_checkout_query'])))
     message=update.get('message',{})
     if message.get('successful_payment') or message.get('refunded_payment'):
-        store.tx(lambda s:apply_payment(s,message,refund=bool(message.get('refunded_payment'))))
+        store.tx(lambda s:(check_bot_update_binding(s),apply_payment(s,message,refund=bool(message.get('refunded_payment'))))[1])
         return jsonify(ok=True)  # charge-ID dedupe, independent of normal update watermark/flood guard
     cb=update.get("callback_query")
     if cb and not background_worker_requested():
@@ -4740,6 +4913,7 @@ def backup_blob():
     snap["outbox"]={}; snap["login_codes"]={}; snap["login_limits"]={}
     snap["sessions"]={}; snap["challenges"]={};snap["approvals"]={}
     snap["system"].pop("worker_tick_lease",None)
+    for k in ("bot_connection","bot_change_lease","bot_replay_history"):snap["system"].pop(k,None)
     for u in snap["users"].values(): u["flow"]={}; u["promo_pending"]=""
     for c in snap["campaigns"].values():c["run"]=None
     snap["system"].pop("backup_lease",None)
@@ -4901,6 +5075,9 @@ def restore_blob(blob):
         for uid,u in s['users'].items():
             if u.get('broadcast_hold') and uid in restored['users']:
                 restored['users'][uid].update(updates_on=False,broadcast_hold=True)
+        for k in ("bot_connection","bot_change_lease","bot_replay_history"):
+            restored["system"].pop(k,None)
+            if k in s["system"]:restored["system"][k]=copy.deepcopy(s["system"][k])
         check_data_capacity(restored)
         audit(restored,"superadmin","backup.restore","Recovery codes and API keys are not re-issued.")
         s.clear(); s.update(restored)
@@ -5000,7 +5177,7 @@ async function req(url,data,method,approvalId='',rawResponse=false){const option
 async function firebasePasswordToken(email,password){if(!FB_WEB_KEY)throw new Error('Configure the Firebase Web API key on the server first.');const r=await fetch('https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key='+encodeURIComponent(FB_WEB_KEY),{method:'POST',headers:{'Content-Type':'application/json'},referrerPolicy:'origin',body:JSON.stringify({email,password,returnSecureToken:true})});const j=await r.json();if(!r.ok||!j.idToken)throw new Error('Firebase login failed. Check email/password and enable Email/Password sign-in in Firebase.');return j.idToken}
 async function copy(text){try{await navigator.clipboard.writeText(text);toast('Copied to clipboard.')}catch{modal('Copy value',`<textarea readonly>${esc(text)}</textarea>`)} }
 function isAdmin(){return ['admin','superadmin'].includes(S.me.role)}function isSuper(){return S.me.role==='superadmin'}
-function nav(){let items=[['overview','grid','Overview'],['analytics','chart','Daily statistics'],['apis','api',isAdmin()?'Endpoints':'My APIs'],['catalog','book','API catalogue'],['referrals','gift',isAdmin()?'Referral review':'Referrals'],['engagement','users',isAdmin()?'Welcome & Broadcast':'Updates'],['wallet','gift','Wallet & Buy'],['developer','book','Developer'],['security','shield','Security centre']];if(isAdmin())items.push(['notifications','clock','Notifications'],['users','users','Users & roles'],['storage','storage','JSON storage'],['activity','clock','Activity log']);if(isSuper())items.push(['operations','settings','Operations'],['backups','cloud','Backups'],['settings','settings','Settings']);items.push(['docs','shield','Help & docs']);$('#navigation').innerHTML=items.map((i,n)=>(i[0]==='users'?'<div class="navlabel">ADMINISTRATION</div>':'')+`<button data-view="${i[0]}" class="${view===i[0]?'active':''}">${icon(i[1])}${i[2]}</button>`).join('');$('#profile').innerHTML=`<div class="avatar">${esc(S.me.name.slice(0,1))}</div><div><strong>${esc(S.me.name)}</strong><br><span class="muted">${esc(S.me.role.toUpperCase())}</span></div>`;if($('#versionbadge'))$('#versionbadge').textContent='v'+S.version+' · DROID';if($('#notificationbtn'))$('#notificationbtn').textContent='Notifications · '+(S.notifications||[]).filter(n=>!(S.notification_seen_ids||[]).includes(n.id)).length;$('#storagebadge').textContent=ISDEMO?'Local demo':S.storage==='firebase'?'Firebase RTDB':'SQLite storage';$('#breadcrumb').textContent=items.find(i=>i[0]===view)?.[2]||'Overview'}
+function nav(){let items=[['overview','grid','Overview'],['analytics','chart','Daily statistics'],['apis','api',isAdmin()?'Endpoints':'My APIs'],['catalog','book','API catalogue'],['referrals','gift',isAdmin()?'Referral review':'Referrals'],['engagement','users',isAdmin()?'Welcome & Broadcast':'Updates'],['wallet','gift','Wallet & Buy'],['developer','book','Developer'],['security','shield','Security centre']];if(isAdmin())items.push(['notifications','clock','Notifications'],['users','users','Users & roles'],['storage','storage','JSON storage'],['activity','clock','Activity log']);if(isSuper())items.push(['botconnection','shield','Bot connection'],['operations','settings','Operations'],['backups','cloud','Backups'],['settings','settings','Settings']);items.push(['docs','shield','Help & docs']);$('#navigation').innerHTML=items.map((i,n)=>(i[0]==='users'?'<div class="navlabel">ADMINISTRATION</div>':'')+`<button data-view="${i[0]}" class="${view===i[0]?'active':''}">${icon(i[1])}${i[2]}</button>`).join('');$('#profile').innerHTML=`<div class="avatar">${esc(S.me.name.slice(0,1))}</div><div><strong>${esc(S.me.name)}</strong><br><span class="muted">${esc(S.me.role.toUpperCase())}</span></div>`;if($('#versionbadge'))$('#versionbadge').textContent='v'+S.version+' · DROID';if($('#notificationbtn'))$('#notificationbtn').textContent='Notifications · '+(S.notifications||[]).filter(n=>!(S.notification_seen_ids||[]).includes(n.id)).length;$('#storagebadge').textContent=ISDEMO?'Local demo':S.storage==='firebase'?'Firebase RTDB':'SQLite storage';$('#breadcrumb').textContent=items.find(i=>i[0]===view)?.[2]||'Overview'}
 async function refresh(){S=await req('/manage/state');nav();render();$('#synctime').textContent='Last synced '+new Date().toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'});}
 function head(kicker,title,desc,action=''){return `<div class="pagehead"><div><div class="eyebrow">${kicker}</div><h1>${title}</h1><p>${desc}</p></div><div class="actions">${action}</div></div>`}
 function button(action,text,primary=false,id=''){return `<button data-action="${action}" ${id?`data-id="${esc(id)}"`:''} class="${primary?'primary':''}">${text}</button>`}
@@ -5044,10 +5221,13 @@ function security(){const sec=S.security;const firebaseConfirm=`<p class="captio
 function showSecurityError(err){if(err.code==='STEP_UP_REQUIRED'){closeModal();go('security')}toast(err.message,true)}
 function formatSelect(name,value='plain'){return `<div class="field"><label>Message format</label><select name="${name}"><option value="plain" ${value==='plain'?'selected':''}>Plain text · placeholders supported</option><option value="markdown" ${value==='markdown'?'selected':''}>Markdown · bold, italic, code and HTTPS links</option>${value==='entities'?'<option value="entities" selected>Telegram captured formatting · edit through bot</option>':''}</select><small>Markdown: *bold*, _italic_, __underline__, ~strike~, ||spoiler||, \`code\`, [label](https://example.com). Escape literal formatting markers with a backslash. No HTML.</small></div>`}
 function analytics(){const d=S.statistics,series=d.series,mx=Math.max(1,...series.map(x=>x.calls)),width=560;return head('Measured activity · UTC','Daily statistics','Last seven days. Charts start with v4.7; no fabricated historical data.',button('refresh','Refresh'))+`<div class="cards">${metric('ACTIVE APIs',d.active_apis,`${d.apis} current endpoints`,'api')}${metric('CALLS TODAY',d.today.calls,'Accepted API attempts','chart')}${metric('ERRORS TODAY',d.today.errors,'Failed accepted calls','shield')}${metric(isAdmin()?'NEW USERS TODAY':'QUOTA USED',isAdmin()?d.new_users_today:d.today_used,isAdmin()?`${d.users} total accounts`:`${d.today_limit} combined active quota`,'users')}</div><div class="card"><h2>Calls per day</h2><p class="caption">Scope: ${esc(d.scope)}. User charts cover currently owned APIs; deleted API histories are not included. Workspace daily aggregates retain deleted-API traffic.</p><svg viewBox="0 0 560 170" style="width:100%;max-height:230px" role="img" aria-label="Seven-day API calls bar chart">${series.map((x,i)=>{const h=x.calls/mx*110,px=i*78+15;return `<rect x="${px}" y="${130-h}" width="40" height="${h}" rx="4" fill="#719bff"/><text x="${px+20}" y="${121-h}" fill="#b9cbed" text-anchor="middle" font-size="11">${x.calls}</text><text x="${px+20}" y="154" fill="#8c9bb1" text-anchor="middle" font-size="11">${x.day.slice(5)}</text>`}).join('')}</svg></div><div class="section" style="margin-top:20px"><div class="tablewrap"><table><thead><tr><th>UTC day</th><th>Calls</th><th>Success</th><th>Errors</th>${isAdmin()?'<th>New users</th><th>Referrals paid</th>':''}</tr></thead><tbody>${series.map(x=>`<tr><td>${x.day}</td><td>${x.calls}</td><td>${x.ok}</td><td>${x.errors}</td>${isAdmin()?`<td>${x.new_users}</td><td>${x.referrals}</td>`:''}</tr>`).join('')}</tbody></table></div></div>${isAdmin()?`<div class="card"><h2>Runtime & recovery</h2><p>Storage: ${esc(d.storage)} · Pending deliveries: ${d.queue}</p><p>Last scheduler: ${d.last_tick?date(d.last_tick)+' '+time(d.last_tick):'Not recorded'}<br>Last backup: ${d.last_backup?date(d.last_backup)+' '+time(d.last_backup):'Not recorded'}</p><p class="caption">Encrypted backups already use Firebase RTDB when configured, otherwise persistent disk. Keep the encryption key private and configure an independent S3/R2 backup if needed.</p></div>`:''}`}
-function operations(){const o=S.operations;if(!o)return '<div class="notice">Owner access required.</div>';return head('Owner operations','Onboarding, logs & appearance','Configure privately. Bot tokens and Firebase backend passwords belong only in private server CONFIG/environment.')+`<div class="notice">Add your bot as administrator in every required channel/group and the private log destination. Verify joins before activation. A join-request alone is not membership. Existing API calls are not disabled by an expired five-minute onboarding check.</div><form id="operationsform"><div class="card"><h2>Join every required channel/group</h2><p class="caption">Up to five destinations. Leave a row entirely blank to omit it. Use @username or the negative numeric chat ID; private channels need a working invite link. Changes invalidate pending verification checks.</p>${Array.from({length:5},(_,i)=>{const c=o.force_join_channels[i]||{};return `<div class="grid2">${field('join_chat_'+i,`Channel/group ${i+1} ID`,c.chat_id||'')}${field('join_title_'+i,'Button label',c.title||'')}${field('join_url_'+i,'HTTPS t.me join link',c.url||'')}</div>`}).join('')}</div><div class="card" style="margin-top:20px"><h2>Private admin logs</h2>${field('log_channel','Private logs channel/group ID',o.log_channel,'text','Use a separate private -100… channel/group, not your public force-join channel.')}${field('heartbeat_minutes','Heartbeat interval · minutes (5–1440)',o.heartbeat_minutes,'number')}${field('daily_report_hour','Previous-day report hour · UTC (0–23)',o.daily_report_hour,'number')}${field('quota_warn_percent','Quota warning threshold · % (50–95)',o.quota_warn_percent,'number')}<p class="caption">A heartbeat means the authenticated scheduler ran; it cannot report its own outage. Configure external uptime monitoring for missing heartbeats. Logs omit API keys, lookup values and raw exceptions; IDs/names and operational counts may be included. Maximum 30 events/minute, with dropped-event counts.</p><p><span class="tag">${S.system.log_verified===o.log_channel&&o.log_channel&&!S.system.log_disabled?'Verified':'Not verified / disabled'}</span></p><p class="caption">${esc(S.system.log_check?.message||'Not checked yet. Verification runs on click, independently of ordinary queued messages.')} ${S.system.log_check?.test_sent?'Test message delivered.':''}</p>${button('testlogs','Verify private log destination',true)}</div><div class="card" style="margin-top:20px"><h2>Custom emoji button icons</h2><label class="checklabel"><input type="checkbox" name="supplied_emoji_enabled" ${o.supplied_emoji_enabled?'checked':''}> Use supplied premium emoji theme in messages and buttons</label><p class="caption">UTF-16-safe entities; credentials/code/links are untouched. Existing manual button IDs take priority. Telegram eligibility applies, with normal-emoji fallback. Latest message check: ${esc(S.system.supplied_emoji_delivery?.status||'Not checked')}. This is server entity retention, not a visual/client-animation test. Saving with the theme enabled clears its cooldown for another normal-message attempt. No welcome sticker is enabled.</p><p class="caption">Buttons support Telegram custom emoji icons, not sticker files. Eligibility is controlled by Telegram. Send /setbuttonemoji all (or primary/success/danger) to the bot, followed by one custom emoji, or paste numeric custom emoji IDs below. No paid emoji access is bundled. Rejected emoji payloads retry once without custom icons.</p>${['primary','success','danger'].map(style=>field('emoji_'+style,style+' icon ID',o.button_icons[style]||'')).join('')}</div><div class="actions" style="margin-top:20px"><button type="submit" class="primary">Save operations</button></div></form><div class="card" style="margin-top:20px"><h2>Referral qualification</h2><p>Inviter earns <b>${S.settings.referral_reward} coins</b>; the referred new user earns <b>${S.settings.referral_new_user_reward} coins</b>. Both are credited once after all configured joins and activation${S.settings.referral_approval?', then admin approval':''}.</p><p class="caption">New installations default to automatic rewards. Existing approval settings are preserved; change them in Settings. Rewards and source prices are configurable in Wallet & Buy. A previously registered Telegram ID cannot become a new referral.</p></div>`}
+function operations(){const o=S.operations;if(!o)return '<div class="notice">Owner access required.</div>';return head('Owner operations','Onboarding, logs & appearance','Configure privately. Bot tokens can be changed in the super-admin Bot connection page. Firebase backend passwords remain private hosting configuration.')+`<div class="notice">Add your bot as administrator in every required channel/group and the private log destination. Verify joins before activation. A join-request alone is not membership. Existing API calls are not disabled by an expired five-minute onboarding check.</div><form id="operationsform"><div class="card"><h2>Join every required channel/group</h2><p class="caption">Up to five destinations. Leave a row entirely blank to omit it. Use @username or the negative numeric chat ID; private channels need a working invite link. Changes invalidate pending verification checks.</p>${Array.from({length:5},(_,i)=>{const c=o.force_join_channels[i]||{};return `<div class="grid2">${field('join_chat_'+i,`Channel/group ${i+1} ID`,c.chat_id||'')}${field('join_title_'+i,'Button label',c.title||'')}${field('join_url_'+i,'HTTPS t.me join link',c.url||'')}</div>`}).join('')}</div><div class="card" style="margin-top:20px"><h2>Private admin logs</h2>${field('log_channel','Private logs channel/group ID',o.log_channel,'text','Use a separate private -100… channel/group, not your public force-join channel.')}${field('heartbeat_minutes','Heartbeat interval · minutes (5–1440)',o.heartbeat_minutes,'number')}${field('daily_report_hour','Previous-day report hour · UTC (0–23)',o.daily_report_hour,'number')}${field('quota_warn_percent','Quota warning threshold · % (50–95)',o.quota_warn_percent,'number')}<p class="caption">A heartbeat means the authenticated scheduler ran; it cannot report its own outage. Configure external uptime monitoring for missing heartbeats. Logs omit API keys, lookup values and raw exceptions; IDs/names and operational counts may be included. Maximum 30 events/minute, with dropped-event counts.</p><p><span class="tag">${S.system.log_verified===o.log_channel&&o.log_channel&&!S.system.log_disabled?'Verified':'Not verified / disabled'}</span></p><p class="caption">${esc(S.system.log_check?.message||'Not checked yet. Verification runs on click, independently of ordinary queued messages.')} ${S.system.log_check?.test_sent?'Test message delivered.':''}</p>${button('testlogs','Verify private log destination',true)}</div><div class="card" style="margin-top:20px"><h2>Custom emoji button icons</h2><label class="checklabel"><input type="checkbox" name="supplied_emoji_enabled" ${o.supplied_emoji_enabled?'checked':''}> Use supplied premium emoji theme in messages and buttons</label><p class="caption">UTF-16-safe entities; credentials/code/links are untouched. Existing manual button IDs take priority. Telegram eligibility applies, with normal-emoji fallback. Latest message check: ${esc(S.system.supplied_emoji_delivery?.status||'Not checked')}. This is server entity retention, not a visual/client-animation test. Saving with the theme enabled clears its cooldown for another normal-message attempt. No welcome sticker is enabled.</p><p class="caption">Buttons support Telegram custom emoji icons, not sticker files. Eligibility is controlled by Telegram. Send /setbuttonemoji all (or primary/success/danger) to the bot, followed by one custom emoji, or paste numeric custom emoji IDs below. No paid emoji access is bundled. Rejected emoji payloads retry once without custom icons.</p>${['primary','success','danger'].map(style=>field('emoji_'+style,style+' icon ID',o.button_icons[style]||'')).join('')}</div><div class="actions" style="margin-top:20px"><button type="submit" class="primary">Save operations</button></div></form><div class="card" style="margin-top:20px"><h2>Referral qualification</h2><p>Inviter earns <b>${S.settings.referral_reward} coins</b>; the referred new user earns <b>${S.settings.referral_new_user_reward} coins</b>. Both are credited once after all configured joins and activation${S.settings.referral_approval?', then admin approval':''}.</p><p class="caption">New installations default to automatic rewards. Existing approval settings are preserved; change them in Settings. Rewards and source prices are configurable in Wallet & Buy. A previously registered Telegram ID cannot become a new referral.</p></div>`}
 
 function notifications(){const seen=new Set(S.notification_seen_ids||[]);return head('Private admin activity','Notifications','Purchases, trials, API edits, redeem and credit events. Keys and query values are not included.',button('marknotifications','Mark all read',true))+`<div class="notice">Telegram admin alerts: ${S.settings.admin_event_notifications?'enabled':'disabled'}. Delivery needs a running worker or authenticated scheduler. Overview and this list refresh every 30 seconds while visible; this is not browser push.</div><div class="card">${(S.notifications||[]).map(n=>`<div class="statusrow"><div><strong>${esc(n.label)}</strong> ${seen.has(n.id)?'':'<span class="tag blue">New</span>'}<p class="caption">${date(n.t)} ${time(n.t)} · Account ${esc(n.actor)}${n.api_id?' · '+esc(n.api_id):''}${n.currency?' · charged '+n.coins_charged+' '+esc(n.currency):''}</p></div>${n.api_id&&S.apis.some(a=>a.id===n.api_id)?button('apiedit','Edit endpoint',false,n.api_id):''}</div>`).join('')||'<div class="empty">No recorded events yet. This list is populated by real actions, not sample activity.</div>'}</div>`}
-function render(){$('#content').innerHTML=({overview,notifications,analytics,operations,apis,catalog,referrals,engagement,wallet,developer,users,storage,activity,backups,settings,security,docs}[view]||overview)()}
+function botconnection(){if(!isSuper())return '<div class="notice">Super-admin access required.</div>';const b=S.bot_connection||{};return head('Super-admin only','Bot connection','Verify the identity before changing the bot. Tokens are never shown after saving.')+`<div class="card"><h3>Current connection</h3><p id="botconnectionstatus" class="caption">@${esc(b.username||S.bot_username)} · ${esc(b.token_mask||'••••••••')}<br>Source: ${esc(b.source||'hosting CONFIG / ENV')}<br>Last recorded status: ${esc(b.last_connection_status||'not checked')}<br>Held deliveries for other bots: ${b.held_deliveries||0}</p>${button('checkbotconnection','Check live webhook')}<div class="divider"></div><div class="field"><label for="new_bot_token">New bot token · leave empty to reconnect current bot</label><input id="new_bot_token" type="password" autocomplete="off" spellcheck="false" autocapitalize="off" maxlength="125" placeholder="Paste privately from BotFather"></div><label class="checklabel"><input id="disconnect_previous_bot" type="checkbox"> If switching to another bot, disconnect this app's previous webhook</label><p class="caption">The saved encrypted connection takes priority over BOT_TOKEN / BOT_USERNAME in hosting ENV. No restart is needed after saving. The token is not returned by the panel, stored in browser storage, or included in backups.</p><div class="actions">${button('verifybottoken','Verify token')}${button('connectbottoken','Save & Connect Webhook',true)}</div><p id="botconnectionresult" role="status" class="caption"></p></div><div class="notice warn">Switching bots does not transfer chats, Stars balances or pending invoices. Recent pending payment orders block a switch. Previous-bot queued messages are held, not deleted or sent through the new bot. Users must open the new bot and send /start; add the new bot to your private logs and required channels again. A revoked/other-app old webhook must be checked separately.</div><p class="caption">Confirm your login in Security centre first. Firebase super-admin password confirmation provides recovery even if the old bot is offline. Telegram-owner sessions keep the configured owner-approval policy. Stop any other polling/deployment process using this token; webhook setup does not revoke their token access.</p>${button('opensecurity','Open Security centre')}`}
+async function botConnectionAction(action){if(!isSuper())throw new Error('Super-admin access required.');const result=$('#botconnectionresult'),input=$('#new_bot_token');const controls=[...document.querySelectorAll('#content button')];controls.forEach(b=>b.disabled=true);let token=input?.value.trim()||'';try{if(action==='checkbotconnection'){const r=await req('/manage/bot-connection');$('#botconnectionstatus').textContent='@'+(r.bot?.username||r.username)+' · '+r.token_mask+' · '+(r.verification_unavailable?'Unable to verify':r.webhook_connected?'Webhook connected':'Webhook NOT connected')+' · Pending: '+(r.pending_updates??'unknown');return;}const verified=await req('/manage/bot-connection',{action:'verify',token});result.textContent='Verified @'+verified.bot.username+' · ID '+verified.bot.id+'. Nothing changed yet.';if(action==='verifybottoken')return;const disconnect=$('#disconnect_previous_bot').checked;if(!confirm('Save bot @'+verified.bot.username+' and connect its webhook? Existing API keys and balances will not change. Old-bot queued messages may be held.'))return;const r=await req('/manage/bot-connection',{action:'connect',token,revision:verified.revision,expected_bot_id:String(verified.bot.id),disconnect_previous:disconnect,confirm:'CONNECT'});input.value='';await refresh();$('#botconnectionresult').textContent=r.message;toast(r.ok?'Bot webhook verified':'Saved, but reconnect is required');}finally{token='';if(input&&action!=='verifybottoken')input.value='';controls.forEach(b=>b.disabled=false);}}
+
+function render(){$('#content').innerHTML=({overview,notifications,analytics,botconnection,operations,apis,catalog,referrals,engagement,wallet,developer,users,storage,activity,backups,settings,security,docs}[view]||overview)()}
 function go(v){view=v;nav();render();$('#sidebar').classList.remove('open');window.scrollTo(0,0)}
 function modal(title,html,submit=null){lastFocus=document.activeElement;$('#modaltitle').textContent=title;$('#modalbody').innerHTML=html;$('#modalback').classList.remove('hidden');modalSubmit=submit;$('#modalbody input, #modalbody textarea, #modalbody button, #modalbody select')?.focus()}
 function closeModal(){$('#modalback').classList.add('hidden');$('#modalbody').innerHTML='';modalSubmit=null;lastFocus?.focus()}
@@ -5068,6 +5248,7 @@ function userModal(id){const u=S.users.find(x=>x.id===id);modal('Manage member',
 function kvModal(key){modal(key?'Edit record':'Add JSON record',`<form id="modalform">${field('key','Record key',key||'')}${area('value','JSON value',key?S.kv[key]:{})}${formEnd()}${key?`<div class="divider"></div><button class="danger" data-action="deletekv" data-id="${esc(key)}">Delete record</button>`:''}`,async f=>{await req('/manage/admin/kv',{key:f.elements.key.value,value:JSON.parse(f.elements.value.value)});closeModal();await refresh();toast('Record saved.')});if(key)$('#f_key').readOnly=true}
 async function handleAction(action,id){
  if(action==='downloadcredentials'){const el=$('#receipt_text'),url=URL.createObjectURL(new Blob([el.value],{type:'text/plain;charset=utf-8'})),a=document.createElement('a');a.href=url;a.download=el.dataset.filename;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);}
+ else if(['checkbotconnection','verifybottoken','connectbottoken'].includes(action)){await botConnectionAction(action);}
  else if(action==='opensecurity'){closeModal();go('security');}
  else if(action==='opennotifications'||action==='marknotifications'){await req('/manage/notifications/read',{});await refresh();go('notifications');}
  else if(action==='removeplanrow'){const row=[...$('#planrows').children].find(r=>r.querySelector('[name=plan_id]').value===id);if(row)row.remove();}
