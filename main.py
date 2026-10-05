@@ -1,69 +1,46 @@
 #!/usr/bin/env python3
-r"""SR DARK 4.16.0 — complete single-file application.
+r"""SR DARK 4.16.1 — complete single-file application.
 
-# SR DARK v4.16.0 — faster navigation, owner inquiries and private support
+# SR DARK v4.16.1 — visible command recovery and restart verification
 
-Developer: **@DroidDeveloper**. Complete single-file application; deploy as **main.py**. This release has not been deployed by the assistant.
+This PRIVATE build retains the existing Firebase Auth/RTDB configuration, bot token, owner allowlist, signing/encryption keys and namespace. No new environment values are required for the existing deployment URL. main.py and app.py are identical configured entrypoints. Developer: @DroidDeveloper.
 
-## What changed
+## What was observed
 
-- **Persistent bot screen:** ordinary menus, typed wizard steps and active support conversations reuse the bot's canonical message. Repeated `/start` does not resend the welcome image when an anchor exists. Pending, unleased menu updates are coalesced into the latest screen. Delivery is serialized per chat.
-- **Real exceptions:** first welcome, deleted/uneditable anchor, one-time long-caption → text migration, explicitly requested media previews, Telegram chat-picker keyboards, invoices, credentials and financial/security receipts can require separate messages. User messages are never edited. Durable delivery remains at-least-once; a crash after Telegram accepts a send but before local acknowledgement can duplicate it.
-- **Quicker acknowledgement:** with a live embedded worker, the webhook commits the update and returns the callback acknowledgement without waiting for message delivery. It wakes the worker immediately. Maintenance uses one transaction; backup work runs in a guarded background thread. Idle polling avoids unnecessary empty outbox writes. Without a live worker, foreground delivery remains available.
-- **Admin stats:** `/stats`, `/stat`, `/adminstats` show workspace statistics to admins. Customer `/stats` and `/stat` stay personal. Active daily quota and the short demo's lifetime budget are displayed separately. Admin statistics include version, worker status and the last process-local webhook DB/foreground-delivery timings—not end-to-end Telegram delivery latency.
-- **Bot action limits:** customer 45/minute; admin 90/minute by default. Owner Settings exposes both limits. Exceeding the limit produces one editable warning rather than silently ignoring every click. API RPM is a separate setting.
-- **Admin-only controls:** All buttons and personal TXT/safe-text selection are hidden and backend-gated for customers. Normal customer catalogue, APIs, wallet, referrals, free claim, demo and support remain. Owner `/delivery` additionally offers a confirmed customer-wide TXT/text default. Existing API keys/clients are unchanged.
+After the corrected configured deployment, live health was HTTP 200, v4.16.0, the login setup error was absent, Firebase login was enabled, the scheduler was active and both Telegram's pending updates and the app outbox were empty. Menu delivery acknowledgements were recorded for existing message anchors. This is not proof that a Telegram client visibly displayed the old edited screen. The old webhook 403 was historical; it was not treated as a new outage. No private message content was read or logged during diagnosis.
 
-## Buy / selected-item inquiry
+## Recovery change
 
-`/buy` → choose a priced API plan or configured Stars pack → preview current price/terms → **Send to owner**.
+- Typed /start, /admin or /menu can recover an existing menu by creating ONE fresh, visible text screen. No more than one recovery per account per 60 seconds; retries in that interval reuse the new screen.
+- Buttons, normal wizard input and support continue editing the canonical message. This is a deliberate exception to the previous always-reuse /start behavior, to recover screens hidden far back in a chat or locally removed in a client.
+- Old unleased navigation jobs are replaced with the latest screen. An in-flight job from before recovery cannot reinstall the old anchor. Financial/security receipts are not coalesced away.
+- /admin still requires the existing approved Telegram admin/owner identity. No role or owner change is included.
+- Bounded request/response metadata records timestamps, update IDs, a fixed command/category label and the acknowledged message ID/mode. No free-text support message, command arguments, password or key is added to this metadata.
 
-The confirmed, generated text includes the customer ID, selected item, price/currency and limits. It is stored in that customer's private owner inbox thread. The quote expires after ten minutes; current price/terms are checked again before submission. Duplicate confirmation cannot repeat the request.
+## Offline and restart behavior
 
-**An inquiry is not a purchase:** it neither debits money/coins nor creates an API nor claims payment success. Automatic coin purchases remain under **Buy with coins / API catalogue**; existing Stars invoice checkout remains under **Wallet / Stars checkout**. No per-call coin billing, UPI digital-goods checkout or EdgeOne/public-counter migration was introduced from the attached notes.
+- Updates not yet delivered to an unavailable webhook are retried by Telegram, subject to Telegram's retention (normally no longer than 24 hours). Permanently lost/expired updates cannot be reconstructed.
+- Once this app accepts an update, its effects and reply jobs are committed transactionally. Firebase-backed pending replies survive an application restart. A crashed worker's lease can expire and be claimed again.
+- Temporary delivery failures retain reply jobs for backoff/retry. Blocked chats and permanent errors still follow their existing cancellation/error policy; successful delivery cannot be guaranteed in every case.
+- Ordinary pending menus are coalesced into the latest useful screen, not one notification for every old click. Receipts/invoices retain their separate policies. Expired payment approvals/invoices are not revived, and normal authorization/rate limits still apply.
+- Duplicate update/payment processing guards remain. Delivery is at-least-once: a crash after Telegram accepts a message but before acknowledgement can still duplicate that message; this does not mean repeating the purchase/credit operation.
+- Webhook setup retains drop_pending_updates=False. Do not manually clear pending updates, reset the database or change namespaces during a restart.
 
-## Two-way support
+## Upload this package
 
-- Customer: **Owner support** or `/support`; type the message while the conversation screen is active.
-- Configured owner: **Customer inbox** or `/support`; open a customer, then Reply. History supports Older/Newer, Refresh, Close and Reopen.
-- Only that customer and hosting-configured Telegram owners can access a conversation. A subordinate admin cannot read other customers' support transcripts.
-- Replies update the existing relevant screen when it is safe to do so. A different active wizard/thread is not interrupted; messages remain unread in the inbox. Home shows unread counts. **Edits do not generate Telegram push notifications**; this is an inbox/conversation UI, not an always-notifying separate DM for every reply. Owners must have started the bot.
-- Text-only: up to **600 UTF-16 units per reply**, **8 replies/minute/account**, **24 recent messages/thread**, **100 threads**, **512 KiB shared encrypted-history budget**. Two messages are displayed per page. Closed threads older than seven days are eligible for pruning when a new thread is created; closing does not immediately erase history or free capacity.
-- Stored message bodies and queued transcript screens are encrypted. Audit logs record events/IDs, not message bodies. Telegram and conversation participants necessarily see delivered text; this is **not end-to-end encryption**. Never send passwords, OTPs or API keys through support.
+1. Replace BOTH main.py and app.py in the private service root, plus requirements.txt. Do not use an older generic archive.
+2. Build: `pip install -r requirements.txt`
+3. Start: `python main.py`
+4. Deploy and check `/health`: HTTP 200, `ok: true`, `version: 4.16.1`.
+5. Send /start once in the bot's private chat. The recovery should place a fresh menu near the bottom; then use its buttons. Use /admin from the configured admin account.
 
-## Logs and premium emoji
+Do not publish these configured files in a public repository or static website. Existing credentials are included. Database rules in the archive are provided, not automatically published. The assistant did not deploy this build, write production state, change the live webhook or send live test messages.
 
-Heartbeat/status/error presentation uses restrained 💙 / ✅ / 🚨 styling and verified custom-emoji mappings. Format-related Telegram 400 errors no longer automatically disable the entire private log destination; real inaccessible/blocked destinations still need repair and verification. Existing encrypted six-hour private-log backups are preserved.
+## Validation
 
-Earlier authorized live tests recognized all 161 supplied IDs but Telegram removed their custom-emoji entities, including the HTML and MarkdownV2 retries. Theme code remains integrated, with graceful standard-emoji fallback, a bounded cooldown and redacted diagnostics. **The actual Telegram/BotFather owner's eligibility remains unresolved. There is no code-only guarantee of Premium rendering.** No new live emoji test messages were sent for this release.
+767 automated tests passed (including 12 new recovery/restart tests), actual-browser local workflow with mocked transports passed, and isolated `python main.py`/Gunicorn v4.16.1 worker startup passed. The private no-ENV initialization check additionally verifies Firebase REST selection, health 200 and login availability with all networking/background threads disabled. These checks do not substitute for verifying the user's next deployment or seeing the actual Telegram screen.
 
-## Deploy the supplied private build
-
-1. Keep the private file/ZIP private: its CONFIG contains existing credentials. Do not commit it to a public repository, static website or browser bundle. Existing private CONFIG values were preserved; only `BOOTSTRAP_V416_FOCUSED_UI=True` was added.
-2. Upload **main.py** and **requirements.txt**. The old filename **app.py** is included only as an identical compatibility copy. Run one application, not both.
-3. Render build: `pip install -r requirements.txt`. Start: `python main.py`. The private build retains `AUTO_WORKER=True`; the entrypoint starts Gunicorn with one gthread worker/four threads and the embedded scheduler. Keep the existing Firebase namespace, Auth account, signing/encryption keys and state.
-4. After your deployment, verify `/health` reports **4.16.0**. An always-on instance avoids platform sleep/cold starts; code cannot eliminate hosting cold-start delays, Firebase latency, network outages or Telegram rate limits.
-5. If changing the URL or refreshing public slash commands, run `python main.py --set-webhook` from your private hosting shell with the correct `BASE_URL`. This changes the live webhook; it was not run for this release. Per-user scoped command menus also refresh during bot interactions.
-6. Test `/start` twice; `/stats`, `/stat`, `/adminstats` from the configured owner; a normal user should not see All buttons/delivery selection. Test a synthetic inquiry and support reply. Check the inbox if another wizard was active.
-7. Firebase rules: publish the UID-scoped rules in Firebase Console if not already applied. A bundled rules file does **not** publish rules. Public read/write=true is unsafe. The previously chosen shared Auth account remains shared; this update does not pretend to restore identity separation.
-
-### Vercel
-
-Expose `main:app` with the Python runtime, use the same configured Firebase REST/Auth storage, and set `BASE_URL` to the chosen public HTTPS deployment. The embedded worker never runs on Vercel. Keep your authenticated external scheduler calling `/tasks/tick` with `Authorization: Bearer <CRON_SECRET>` regularly, typically every minute where your scheduler permits. Do not put the secret in the URL or public files. Foreground webhook delivery is retained; queued counterparty replies/maintenance depend on the scheduler. One Telegram bot has one active webhook URL: registering Vercel replaces Render and vice versa.
-
-### Generic ZIP
-
-The generic archive has no private credentials. Configure its server-only CONFIG/environment and scoped Firebase rules before using it. Enable the relevant retained modern-controls, emoji, safe-delivery and always-on worker flags from the base guide. The v4.16 focused-UI bootstrap flag defaults to True and applies once; it does not reset balances, API keys, plans or later custom settings.
-
-## Verification and honest diagnosis
-
-- **755 automated tests**, including 30 focused-mode tests, plus legacy/Firebase/payment/emoji/security regressions.
-- Three Chromium scenarios: new support/inquiry/navigation/settings workflow, retained legacy compatibility/security flow, and Operations/force-join/log UI. Mobile checks and zero JavaScript page errors.
-- Isolated `python main.py` → Gunicorn production-mode smoke test: v4.16 health, scheduler tick and focused bootstrap verified; all outbound transports disabled.
-- Live read-only check: production was **4.15.1**, worker heartbeat recent, queue empty, owner not blocked, logs enabled. Admin stats/dashboard rendered successfully against an in-memory copy of live state. Historical `edit_unavailable` and generic input errors were present. This does not prove the exact historical `/stats` failure or measure production reply latency.
-- All write-path/Telegram/provider tests above were synthetic and local. No production state write, deployment, broadcast or additional live message was performed for this release.
-
-Preserved: Telegram-only customers; admin HTML; automatic coin/Stars purchases; 50-coin configurable referrals; separate 10-day/100-daily starter and 20-minute/100-total demo; owner approvals; existing API clients; safe TXT/text credentials; hidden upstreams; six-hour encrypted backups. No welcome sticker was reintroduced.
+All other v4.16 features remain: two-way encrypted support, priced owner inquiries without payment claims, automatic coin/Stars purchases, admin-only controls/delivery selector, safe credentials, owner approvals, same-message navigation, encrypted backups and Telegram-eligibility-aware emoji fallback.
 
 """
 from __future__ import annotations
@@ -114,65 +91,58 @@ from werkzeug.exceptions import HTTPException
 from flask.json.provider import DefaultJSONProvider
 
 # OPTIONAL ENV: fill these values directly for a private, server-only deployment.
-CONFIG = {'BOOTSTRAP_V4151_EMOJI': True,
- 'BOOTSTRAP_V415_CONTROLS': True,
- 'AUTO_WORKER': True,
- 'LOCK_OWNER_CONFIG': True,
- 'PROXY_KEEPALIVE': True,
- 'BOOTSTRAP_V414_SAFE_DELIVERY': True,
- 'BOOTSTRAP_DASHBOARD_WELCOME': True,
- 'BOOTSTRAP_VALIDATION_SOURCES': True,
- 'TELEGRAM_WEBHOOK_CONNECTIONS': 4,
- 'FIREBASE_ALLOW_SHARED_ACCOUNT': True,
- 'FIREBASE_ACCESS_MODE': 'rest',
- 'FIREBASE_BACKEND_EMAIL': 'Droid@gmail.com',
- 'FIREBASE_BACKEND_PASSWORD': 'Droid0602',
- 'FIREBASE_BACKEND_UID': '1egET0mDQXSXj2u5ZZxgxZlW3vd2',
- 'BOT_TOKEN': '8850790399:AAGRDRviB65ZWJ2x_S9ydkRYUte2ta_9I_w',
- 'BOT_USERNAME': 'Hahusuusbot',
- 'SUPER_ADMIN_IDS': '8987478830',
- 'BASE_URL': 'https://api-maker-by-bot.onrender.com',
- 'SECRET_KEY': 'e7f5_cRfQ2CnMF4-pSuRBw4BzZfOnSD-IrfEIBzHFzad8_RA3l1g_EofHQcL4LKU',
- 'WEBHOOK_SECRET': 'FC-LGiosyjGNkGqif0RM62wWfSpQHg2Oo0qfoip9FKVtQ1A4YDjK2VwY35YSn1Ds',
- 'CRON_SECRET': 'GUUCUEN7PJ6MajZDLJzzON4LwUo-vW1BBSL0zU3WGoe-1gcDAuispkz58otXe-87',
- 'FIREBASE_PROJECT_ID': 'vps-bot-api-makerbckup',
- 'FIREBASE_WEB_CONFIG': {'apiKey': 'AIzaSyAlibQoi962M_JrsP-iVKHHl6K2bSbj8S4',
-                         'authDomain': 'vps-bot-api-makerbckup.firebaseapp.com',
-                         'databaseURL': 'https://vps-bot-api-makerbckup-default-rtdb.asia-southeast1.firebasedatabase.app',
-                         'projectId': 'vps-bot-api-makerbckup',
-                         'storageBucket': 'vps-bot-api-makerbckup.firebasestorage.app',
-                         'messagingSenderId': '302260354275',
-                         'appId': '1:302260354275:web:ae0ad26df6f5154f7419d6',
-                         'measurementId': 'G-5Y0LEE2HPJ'},
- 'INITIAL_LOG_CHANNEL': '-1004358894107',
- 'FIREBASE_DATABASE_URL': 'https://vps-bot-api-makerbckup-default-rtdb.asia-southeast1.firebasedatabase.app',
- 'FIREBASE_WEB_API_KEY': 'AIzaSyAlibQoi962M_JrsP-iVKHHl6K2bSbj8S4',
- 'FIREBASE_SUPER_ADMIN_UIDS': '1egET0mDQXSXj2u5ZZxgxZlW3vd2',
- 'FIREBASE_ADMIN_UIDS': '',
- 'FIREBASE_SERVICE_ACCOUNT': '/etc/secrets/firebase-service-account.json',
- 'FIREBASE_NAMESPACE': 'srdark_v4',
- 'SQLITE_PATH': 'data/srdark.sqlite3',
- 'S3_BUCKET': '',
- 'S3_ENDPOINT_URL': '',
- 'S3_REGION': 'auto',
- 'S3_ACCESS_KEY': '',
- 'S3_SECRET_KEY': '',
- 'BACKUP_DIR': 'data/backups',
- 'BACKUP_KEY': 'YQMBxEzc6rMCsaaPv4KwVI9CI_bbKY5PFRHR6CGm7to=',
- 'HTTP_API_RPM': 180,
- 'HTTP_GLOBAL_RPM': 1200,
- 'TRUST_PROXY_HOPS': 0,
- 'REDIS_URL': '',
- 'REDIS_PREFIX': 'srdark-v4',
- 'EXTRA_HOSTS': '',
- 'BOOTSTRAP_V416_FOCUSED_UI': True}
+CONFIG = {
+    'BOOTSTRAP_V416_FOCUSED_UI': True,
+    "BOOTSTRAP_V415_CONTROLS": False,
+    "BOOTSTRAP_V4151_EMOJI": False,
+    "PROXY_KEEPALIVE": False, # private build reuses pinned TLS connections, never response data
+    "AUTO_WORKER": False, # private Render build enables; never runs on Vercel
+    "LOCK_OWNER_CONFIG": False, # private build pins owner IDs to CONFIG, not web/DB/env
+
+    "BOOTSTRAP_V414_SAFE_DELIVERY": False, # private edition: TXT receipts and owner alerts once
+    "BOOTSTRAP_DASHBOARD_WELCOME": False, # private edition: one-time requested dashboard/sticker removal
+    "BOOTSTRAP_VALIDATION_SOURCES": False, # private edition enables two safe offline validation sources once
+    "TELEGRAM_WEBHOOK_CONNECTIONS": 4,     # match small Render worker capacity; apply with --set-webhook
+    "FIREBASE_ALLOW_SHARED_ACCOUNT": False, # explicit opt-in: backend identity may also be an approved human admin
+    "FIREBASE_ACCESS_MODE": "rest",        # rest = Firebase Auth + rules; sdk = optional legacy Admin SDK
+    "FIREBASE_BACKEND_EMAIL": "",          # dedicated backend Auth account; NOT the human admin login
+    "FIREBASE_BACKEND_PASSWORD": "",       # private; fill locally, never in chat or a public repo
+    "FIREBASE_BACKEND_UID": "",            # exact dedicated backend Auth UID, also used in RTDB rules
+    "BOT_TOKEN": "", "BOT_USERNAME": "",  # username optional; verified via getMe at webhook setup
+    "SUPER_ADMIN_IDS": "",                 # comma-separated Telegram numeric IDs
+    "BASE_URL": "",                        # https://your-domain, no trailing slash
+    "SECRET_KEY": "",                      # generate: python app.py --new-secret
+    "WEBHOOK_SECRET": "",                  # 32+ chars: letters/digits/_/-
+    "CRON_SECRET": "",                     # 32+ random characters
+    "FIREBASE_PROJECT_ID": "",            # same project as Auth accounts, Web API key and RTDB
+    "FIREBASE_WEB_CONFIG": {},            # PUBLIC web metadata only; Analytics is not enabled
+    "INITIAL_LOG_CHANNEL": "",            # bootstrap for a new database; editable in Operations
+    "FIREBASE_DATABASE_URL": "",
+    "FIREBASE_WEB_API_KEY": "",            # public Web API key from the SAME Firebase project
+    "FIREBASE_SUPER_ADMIN_UIDS": "",       # comma-separated Authentication → Users UIDs
+    "FIREBASE_ADMIN_UIDS": "",             # optional additional, lower-privilege admin UIDs
+    "FIREBASE_SERVICE_ACCOUNT": "",        # optional legacy sdk mode only; NOT needed in rest mode
+    "FIREBASE_NAMESPACE": "srdark_v4",      # separate from legacy HTML data
+    "SQLITE_PATH": "data/srdark.sqlite3",   # Render persistent disk: /var/data/srdark.sqlite3
+    "S3_BUCKET": "",                       # optional independent backup (S3/R2)
+    "S3_ENDPOINT_URL": "", "S3_REGION": "auto",
+    "S3_ACCESS_KEY": "", "S3_SECRET_KEY": "",
+    "BACKUP_DIR": "data/backups",          # persistent disk for SQLite-only installs
+    "BACKUP_KEY": "",                      # optional Fernet key; otherwise derived from SECRET_KEY
+    # Admission limits are separate from subscription quotas. WAF/edge protection still required.
+    "HTTP_API_RPM": 180, "HTTP_GLOBAL_RPM": 1200,
+    "TRUST_PROXY_HOPS": 0,                  # only increase behind a VERIFIED, locked-down proxy
+    "REDIS_URL": "",                       # optional rediss:// for shared, atomic admission limits
+    "REDIS_PREFIX": "srdark-v4",             # separate installs should use separate prefixes
+    "EXTRA_HOSTS": "",                     # optional comma-separated exact production hostnames
+}
 def cfg(k):
     if k in ("SUPER_ADMIN_IDS","FIREBASE_SUPER_ADMIN_UIDS") and CONFIG.get("LOCK_OWNER_CONFIG") is True:return CONFIG.get(k,"")
     value=os.environ.get(k, CONFIG.get(k, ""))
     if k=='BASE_URL' and not value:value=os.environ.get('RENDER_EXTERNAL_URL','').rstrip('/')
     return value
 DEMO = "--demo" in sys.argv or os.environ.get("SRD_DEMO") == "1"
-VERSION = "4.16.0"
+VERSION = "4.16.1"
 LOG = logging.getLogger("srdark")
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 SUPER_IDS = {x.strip() for x in str(cfg("SUPER_ADMIN_IDS")).split(",") if x.strip().isdigit()}
@@ -3240,14 +3210,28 @@ def focused_ui(s):return bool(s['settings'].get('focused_bot_ui'))
 
 def valid_nav(anchor):return isinstance(anchor,dict) and type(anchor.get('id')) is int and 0<anchor['id']<2**31
 
+def recover_bot_screen(s,uid):
+    # Explicit typed /start or /admin may recover a screen hidden far up the chat.
+    # Callbacks/wizard input never create a recovery screen. At most once per minute.
+    u=s['users'][str(uid)]
+    if u.get('nav_recovery_pending') or u.get('nav_recovery_at',0)+60>now() or not valid_nav(u.get('bot_nav')):return False
+    u['nav_epoch']=u.get('nav_epoch',0)+1;u['nav_recovery_at']=now();u['nav_recovery_pending']=True
+    u.pop('bot_nav',None)
+    # Old leased jobs may finish, but cannot re-install their obsolete anchor.
+    for key,job in list(s['outbox'].items()):
+        if job.get('chat')==str(uid) and job.get('nav') and job.get('lease',0)<=now() and not job.get('receipt'):del s['outbox'][key]
+    return True
+
 def nav_job(s,key,uid,update=None):
     j=s['outbox'].get(key);u=s['users'].get(str(uid))
     if not j or not u or j.get('kind') not in ('message','photo') or j.get('receipt') or j.get('reply_keyboard'):return
-    j.update(nav=True,priority=-10)
+    j.update(nav=True,priority=-10,nav_epoch=u.get("nav_epoch",0))
     # Only ordinary bot screens. Requested media previews and security/financial receipts are separate.
     if j.get('explicit_preview'):j.pop('nav',None);return
-    anchor=u.get('bot_nav',{})
-    if not valid_nav(anchor) and update:
+    anchor={} if u.get('nav_recovery_pending') else u.get('bot_nav',{})
+    if u.get('nav_recovery_pending'):
+        j.pop('edit_message_id',None);j.pop('edit_caption',None);j.pop('photo',None);j.pop('video',None);j['kind']='message'
+    if not valid_nav(anchor) and update and not u.get('nav_recovery_pending'):
         target=callback_edit_target(update,j)
         if target:anchor={'id':target['edit_message_id'],'caption':target.get('edit_caption',False)}
     if valid_nav(anchor):
@@ -3537,6 +3521,7 @@ def process_bot(s,update):
     ref=args[4:] if first=="/start" and args.startswith("ref_") else ""
     u=register(s,uid,sender.get("first_name","Member"),ref)
     u.update(last_active=now(),telegram_started=True,telegram_blocked=False)
+    u['bot_last_request']={'at':now(),'update_id':update_id,'kind':'callback' if cb else first if first in ('/start','/admin','/stats','/stat','/adminstats','/menu','/support') else 'command' if first.startswith('/') else 'input'}
     panel_attempt=(cb and raw in ('panel','cmd:panel','cmd:planel')) or (not cb and (first in ('/panel','/planel') or first=='/start' and args=='panel'))
     if panel_attempt and (not is_admin(uid,s) or u.get('blocked')):security_notice(s,'panel_denied',uid,'telegram')
     command_button=bool(cb and raw.startswith('cmd:'))
@@ -3574,6 +3559,8 @@ def process_bot(s,update):
         if first=='/stat' and not is_admin(uid,s):action='mystats'
         if first=='/support':action='supportinbox' if uid in SUPER_IDS else 'paysupport'
         if action=='buy':action='ownerbuy'
+    if focused_ui(s) and not cb and first in ('/start','/admin','/menu') and action in ('home','admin'):recover_bot_screen(s,uid)
+    if action=='home':u['bot_view']='home'
     if first=="/start":queue_commands(s,uid)
     rows=[[btn("Home","home")]]; text=""
     checkpoint=copy.deepcopy(s)
@@ -4247,7 +4234,10 @@ def drain(limit=4,budget=12,chat=None,job_id=None):
                     if not u or u.get('blocked') or (target and v['chat']!=target and v['chat'] not in SUPER_IDS) or (not target and v['chat'] not in SUPER_IDS):
                         del s['outbox'][k];continue
                 if focused_ui(s) and v.get('nav') and u:
-                    anchor=u.get('bot_nav',{})
+                    if v.get('nav_epoch',0)!=u.get('nav_epoch',0):del s['outbox'][k];continue
+                    if u.get('nav_recovery_pending'):
+                        v.pop('edit_message_id',None);v.pop('edit_caption',None);v.pop('photo',None);v.pop('video',None);v['kind']='message'
+                    anchor={} if u.get('nav_recovery_pending') else u.get('bot_nav',{})
                     if valid_nav(anchor) and not v.get('needs_text_anchor') and not v.get('edit_fallback'):
                         if not anchor.get('caption') or v.get('screen_units',text_units(v.get('text','')))<=1024:
                             v.pop('photo',None);v.pop('video',None);v['kind']='message';v.update(edit_message_id=anchor['id'],edit_caption=bool(anchor.get('caption')))
@@ -4333,9 +4323,11 @@ def drain(limit=4,budget=12,chat=None,job_id=None):
                         if s['system'].get('emoji_silent_warn_at',0)+3600<=now():
                             s['system']['emoji_silent_warn_at']=now()
                             ops_log(s,'Custom emoji not retained','system','Message delivered, but Telegram removed custom emoji. Check actual BotFather owner Premium/Fragment eligibility. Automatic theme paused for one hour; no resend.')
-                if v.get('nav') and u:
+                if v.get('nav') and u and v.get('nav_epoch',0)==u.get('nav_epoch',0):
                     mid=v.get('edit_message_id') or (job_result.get('message_id') if isinstance(job_result,dict) else None)
-                    if type(mid) is int:u['bot_nav']={'id':mid,'caption':bool(v.get('photo') or v.get('video') or v.get('edit_caption')),'t':now()}
+                    if type(mid) is int:
+                        u['bot_nav']={'id':mid,'caption':bool(v.get('photo') or v.get('video') or v.get('edit_caption')),'t':now()};u.pop('nav_recovery_pending',None)
+                        u['bot_last_response']={'at':now(),'update_id':v.get('request_update_id'),'message_id':mid,'mode':'edit' if v.get('edit_message_id') else 'new'}
                 if v.get('log_check_id') and s['system'].get('log_check',{}).get('job_id')==v['log_check_id']:
                     s['system']['log_check']['test_sent']=True
                 if v['kind']=='backup':
@@ -4540,6 +4532,7 @@ def webhook():
         for key in [k for k in state['outbox'] if k not in before]:
             if key not in state['outbox']:continue
             job=state['outbox'][key]
+            job['request_update_id']=str(update.get('update_id',''))
             if job.get('kind')=='logverify':checks.append(key)
             if job.get('kind')=='joinsetup':setup_jobs.append(key)
             if job.get('group_help'):group_replies.append(key)
