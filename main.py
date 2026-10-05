@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-r"""SR DARK 4.17.0 — complete application.
+r"""PRIVATE CONFIGURED app.py / main.py — SR DARK 4.17.0.
+Contains existing credentials. Keep private. Start: python app.py.
 
 # SR DARK v4.17.0 — simple customer bot
 
@@ -95,52 +96,59 @@ from werkzeug.exceptions import HTTPException
 from flask.json.provider import DefaultJSONProvider
 
 # OPTIONAL ENV: fill these values directly for a private, server-only deployment.
-CONFIG = {
-    "BOOTSTRAP_V417_SIMPLE_UI": True,
-    'BOOTSTRAP_V416_FOCUSED_UI': True,
-    "BOOTSTRAP_V415_CONTROLS": False,
-    "BOOTSTRAP_V4151_EMOJI": False,
-    "PROXY_KEEPALIVE": False, # private build reuses pinned TLS connections, never response data
-    "AUTO_WORKER": False, # private Render build enables; never runs on Vercel
-    "LOCK_OWNER_CONFIG": False, # private build pins owner IDs to CONFIG, not web/DB/env
-
-    "BOOTSTRAP_V414_SAFE_DELIVERY": False, # private edition: TXT receipts and owner alerts once
-    "BOOTSTRAP_DASHBOARD_WELCOME": False, # private edition: one-time requested dashboard/sticker removal
-    "BOOTSTRAP_VALIDATION_SOURCES": False, # private edition enables two safe offline validation sources once
-    "TELEGRAM_WEBHOOK_CONNECTIONS": 4,     # match small Render worker capacity; apply with --set-webhook
-    "FIREBASE_ALLOW_SHARED_ACCOUNT": False, # explicit opt-in: backend identity may also be an approved human admin
-    "FIREBASE_ACCESS_MODE": "rest",        # rest = Firebase Auth + rules; sdk = optional legacy Admin SDK
-    "FIREBASE_BACKEND_EMAIL": "",          # dedicated backend Auth account; NOT the human admin login
-    "FIREBASE_BACKEND_PASSWORD": "",       # private; fill locally, never in chat or a public repo
-    "FIREBASE_BACKEND_UID": "",            # exact dedicated backend Auth UID, also used in RTDB rules
-    "BOT_TOKEN": "", "BOT_USERNAME": "",  # username optional; verified via getMe at webhook setup
-    "SUPER_ADMIN_IDS": "",                 # comma-separated Telegram numeric IDs
-    "BASE_URL": "",                        # https://your-domain, no trailing slash
-    "SECRET_KEY": "",                      # generate: python app.py --new-secret
-    "WEBHOOK_SECRET": "",                  # 32+ chars: letters/digits/_/-
-    "CRON_SECRET": "",                     # 32+ random characters
-    "FIREBASE_PROJECT_ID": "",            # same project as Auth accounts, Web API key and RTDB
-    "FIREBASE_WEB_CONFIG": {},            # PUBLIC web metadata only; Analytics is not enabled
-    "INITIAL_LOG_CHANNEL": "",            # bootstrap for a new database; editable in Operations
-    "FIREBASE_DATABASE_URL": "",
-    "FIREBASE_WEB_API_KEY": "",            # public Web API key from the SAME Firebase project
-    "FIREBASE_SUPER_ADMIN_UIDS": "",       # comma-separated Authentication → Users UIDs
-    "FIREBASE_ADMIN_UIDS": "",             # optional additional, lower-privilege admin UIDs
-    "FIREBASE_SERVICE_ACCOUNT": "",        # optional legacy sdk mode only; NOT needed in rest mode
-    "FIREBASE_NAMESPACE": "srdark_v4",      # separate from legacy HTML data
-    "SQLITE_PATH": "data/srdark.sqlite3",   # Render persistent disk: /var/data/srdark.sqlite3
-    "S3_BUCKET": "",                       # optional independent backup (S3/R2)
-    "S3_ENDPOINT_URL": "", "S3_REGION": "auto",
-    "S3_ACCESS_KEY": "", "S3_SECRET_KEY": "",
-    "BACKUP_DIR": "data/backups",          # persistent disk for SQLite-only installs
-    "BACKUP_KEY": "",                      # optional Fernet key; otherwise derived from SECRET_KEY
-    # Admission limits are separate from subscription quotas. WAF/edge protection still required.
-    "HTTP_API_RPM": 180, "HTTP_GLOBAL_RPM": 1200,
-    "TRUST_PROXY_HOPS": 0,                  # only increase behind a VERIFIED, locked-down proxy
-    "REDIS_URL": "",                       # optional rediss:// for shared, atomic admission limits
-    "REDIS_PREFIX": "srdark-v4",             # separate installs should use separate prefixes
-    "EXTRA_HOSTS": "",                     # optional comma-separated exact production hostnames
-}
+CONFIG = {'BOOTSTRAP_V4151_EMOJI': True,
+ 'BOOTSTRAP_V415_CONTROLS': True,
+ 'AUTO_WORKER': True,
+ 'LOCK_OWNER_CONFIG': True,
+ 'PROXY_KEEPALIVE': True,
+ 'BOOTSTRAP_V414_SAFE_DELIVERY': True,
+ 'BOOTSTRAP_DASHBOARD_WELCOME': True,
+ 'BOOTSTRAP_VALIDATION_SOURCES': True,
+ 'TELEGRAM_WEBHOOK_CONNECTIONS': 4,
+ 'FIREBASE_ALLOW_SHARED_ACCOUNT': True,
+ 'FIREBASE_ACCESS_MODE': 'rest',
+ 'FIREBASE_BACKEND_EMAIL': 'Droid@gmail.com',
+ 'FIREBASE_BACKEND_PASSWORD': 'Droid0602',
+ 'FIREBASE_BACKEND_UID': '1egET0mDQXSXj2u5ZZxgxZlW3vd2',
+ 'BOT_TOKEN': '8850790399:AAGRDRviB65ZWJ2x_S9ydkRYUte2ta_9I_w',
+ 'BOT_USERNAME': 'Hahusuusbot',
+ 'SUPER_ADMIN_IDS': '8987478830',
+ 'BASE_URL': 'https://api-maker-by-bot.onrender.com',
+ 'SECRET_KEY': 'e7f5_cRfQ2CnMF4-pSuRBw4BzZfOnSD-IrfEIBzHFzad8_RA3l1g_EofHQcL4LKU',
+ 'WEBHOOK_SECRET': 'FC-LGiosyjGNkGqif0RM62wWfSpQHg2Oo0qfoip9FKVtQ1A4YDjK2VwY35YSn1Ds',
+ 'CRON_SECRET': 'GUUCUEN7PJ6MajZDLJzzON4LwUo-vW1BBSL0zU3WGoe-1gcDAuispkz58otXe-87',
+ 'FIREBASE_PROJECT_ID': 'vps-bot-api-makerbckup',
+ 'FIREBASE_WEB_CONFIG': {'apiKey': 'AIzaSyAlibQoi962M_JrsP-iVKHHl6K2bSbj8S4',
+                         'authDomain': 'vps-bot-api-makerbckup.firebaseapp.com',
+                         'databaseURL': 'https://vps-bot-api-makerbckup-default-rtdb.asia-southeast1.firebasedatabase.app',
+                         'projectId': 'vps-bot-api-makerbckup',
+                         'storageBucket': 'vps-bot-api-makerbckup.firebasestorage.app',
+                         'messagingSenderId': '302260354275',
+                         'appId': '1:302260354275:web:ae0ad26df6f5154f7419d6',
+                         'measurementId': 'G-5Y0LEE2HPJ'},
+ 'INITIAL_LOG_CHANNEL': '-1004358894107',
+ 'FIREBASE_DATABASE_URL': 'https://vps-bot-api-makerbckup-default-rtdb.asia-southeast1.firebasedatabase.app',
+ 'FIREBASE_WEB_API_KEY': 'AIzaSyAlibQoi962M_JrsP-iVKHHl6K2bSbj8S4',
+ 'FIREBASE_SUPER_ADMIN_UIDS': '1egET0mDQXSXj2u5ZZxgxZlW3vd2',
+ 'FIREBASE_ADMIN_UIDS': '',
+ 'FIREBASE_SERVICE_ACCOUNT': '/etc/secrets/firebase-service-account.json',
+ 'FIREBASE_NAMESPACE': 'srdark_v4',
+ 'SQLITE_PATH': 'data/srdark.sqlite3',
+ 'S3_BUCKET': '',
+ 'S3_ENDPOINT_URL': '',
+ 'S3_REGION': 'auto',
+ 'S3_ACCESS_KEY': '',
+ 'S3_SECRET_KEY': '',
+ 'BACKUP_DIR': 'data/backups',
+ 'BACKUP_KEY': 'YQMBxEzc6rMCsaaPv4KwVI9CI_bbKY5PFRHR6CGm7to=',
+ 'HTTP_API_RPM': 180,
+ 'HTTP_GLOBAL_RPM': 1200,
+ 'TRUST_PROXY_HOPS': 0,
+ 'REDIS_URL': '',
+ 'REDIS_PREFIX': 'srdark-v4',
+ 'EXTRA_HOSTS': '',
+ 'BOOTSTRAP_V416_FOCUSED_UI': True,
+ 'BOOTSTRAP_V417_SIMPLE_UI': True}
 def cfg(k):
     if k in ("SUPER_ADMIN_IDS","FIREBASE_SUPER_ADMIN_UIDS") and CONFIG.get("LOCK_OWNER_CONFIG") is True:return CONFIG.get(k,"")
     value=os.environ.get(k, CONFIG.get(k, ""))
@@ -1683,7 +1691,7 @@ def body():
     d=request.get_json(silent=True); require(isinstance(d,dict),"Valid JSON object required; duplicate keys/non-finite numbers are rejected."); validate_json_tree(d); return d
 
 @app.get("/health")
-def health(): return jsonify(ok=store is not None,version=VERSION,mode="demo" if DEMO else "production"),200 if store else 503
+def health(): return jsonify(ok=store is not None,version=VERSION,mode="demo" if DEMO else "production",build="PRIVATE-SIMPLE-417"),200 if store else 503
 @app.get("/manage/state")
 @protected()
 def state_route(uid): return jsonify(public_state(store.read(),uid))
