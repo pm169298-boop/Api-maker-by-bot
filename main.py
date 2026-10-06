@@ -3608,14 +3608,13 @@ def nav_job(s,key,uid,update=None):
     j.update(nav=True,priority=-10,nav_epoch=u.get("nav_epoch",0))
     # Only ordinary bot screens. Requested media previews and security/financial receipts are separate.
     if j.get('explicit_preview'):j.pop('nav',None);return
-    anchor={} if u.get('nav_recovery_pending') else u.get('bot_nav',{})
+    # v4.18 FINAL: anchor = sirf TAPPED message (callback). Typ/wizard input =
+    # koi anchor nahi → hamesha NAYA message niche. bot_nav fallback hata diya
+    # (wahi "upar wale me response" wala bug tha).
+    anchor={}
     if u.get('nav_recovery_pending'):
         j.pop('edit_message_id',None);j.pop('edit_caption',None);j.pop('photo',None);j.pop('video',None);j['kind']='message'
-    # Callback ho to USI tapse hue message ko edit karo — purane nav anchor (upar wala) nahi
     if update and isinstance(update.get('callback_query'),dict) and not u.get('nav_recovery_pending'):
-        target=callback_edit_target(update,j)
-        if target:anchor={'id':target['edit_message_id'],'caption':target.get('edit_caption',False)}
-    elif not valid_nav(anchor) and update and not u.get('nav_recovery_pending'):
         target=callback_edit_target(update,j)
         if target:anchor={'id':target['edit_message_id'],'caption':target.get('edit_caption',False)}
     if valid_nav(anchor):
@@ -3822,8 +3821,7 @@ def finish_join_setup(s,v,result):
     u['flow']={'step':'join_confirm' if result['url'] else 'join_link','draft':result,'t':now()}
     key=soft_message(s,v['chat'],md('Selected: '+result['title']+'\n'+('Confirm adding this required join.' if result['url'] else 'Send its working https://t.me/+… invite link. A private chat ID is not an invite link.')),
                  [[btn('Add required join','joinconfirm','success'),btn('Cancel','home')]] if result['url'] else [[btn('Cancel','home')]])
-    nav=u.get('bot_nav',{})
-    if key and v415_enabled(s) and nav.get('id') and nav.get('t',0)+86400>now():s['outbox'][key].update(nav=True,edit_message_id=nav['id'],edit_caption=nav.get('caption',False))
+    # nav anchor hata di — response hamesha naye message me
 
 _WORKER_THREAD=None
 _WORKER_LOCK=threading.Lock()
@@ -3945,7 +3943,7 @@ def process_bot(s,update):
         if first=='/stat' and not is_admin(uid,s):action='mystats'
         if first=='/support':action='supportinbox' if uid in SUPER_IDS else 'paysupport'
         if action=='buy' and not simple_ui(s):action='ownerbuy'
-    if focused_ui(s) and not cb and first in ('/start','/admin','/menu') and action in ('home','admin'):recover_bot_screen(s,uid)
+    # recover_bot_screen band — typed /start ab kabhi purana screen edit nahi karega (naya message)
     if action=='home':u['bot_view']='home'
     if simple_ui(s) and first in ('/support','/contact'):action='support_removed'
     if first=="/start":queue_commands(s,uid)
@@ -4668,10 +4666,8 @@ def drain(limit=4,budget=12,chat=None,job_id=None):
                     if v.get('nav_epoch',0)!=u.get('nav_epoch',0):del s['outbox'][k];continue
                     if u.get('nav_recovery_pending'):
                         v.pop('edit_message_id',None);v.pop('edit_caption',None);v.pop('photo',None);v.pop('video',None);v['kind']='message'
-                    anchor={} if u.get('nav_recovery_pending') else u.get('bot_nav',{})
-                    if valid_nav(anchor) and not v.get('needs_text_anchor') and not v.get('edit_fallback'):
-                        if not anchor.get('caption') or v.get('screen_units',text_units(v.get('text','')))<=1024:
-                            v.pop('photo',None);v.pop('video',None);v['kind']='message';v.update(edit_message_id=anchor['id'],edit_caption=bool(anchor.get('caption')))
+                    # anchor re-target HATA DIYA — response tapped message ya naya message,
+                    # kabhi bhi purane (upar wale) message par shift nahi hoga.
                 if v.get('kind')=='engagement':
                     if not promo_valid(s,v):drop_promo(s,k);continue
                     wait=promo_wait(s,u)
