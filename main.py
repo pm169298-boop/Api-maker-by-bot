@@ -2337,10 +2337,11 @@ def link_rows(links):return [[btn(item['label'],url=item['url'])] for item in li
 
 def welcome_enqueue(s,uid,preview=False,keyboard=None):
     if simple_ui(s) and not preview:
-        text,rows=simple_home(s,uid);key=enqueue(s,uid,text,keyboard if keyboard is not None else rows);nav_job(s,key,uid);return key
+        # nav_job hataya — typed /start hamesha NAYA message niche aaye (upar wale me edit nahi)
+        text,rows=simple_home(s,uid);key=enqueue(s,uid,text,keyboard if keyboard is not None else rows);return key
     u=s['users'][uid];st=s['settings']
     if focused_ui(s) and not preview and valid_nav(u.get('bot_nav')):
-        text,rows=menu(s,uid);key=enqueue(s,uid,text,keyboard or rows);nav_job(s,key,uid);return key
+        text,rows=menu(s,uid);key=enqueue(s,uid,text,keyboard or rows);return key
     text=dashboard_text(s,uid) if st.get('welcome_dashboard') else md(render_marketing(st['welcome_caption'],u,st))
     rows=keyboard if keyboard is not None else link_rows(st['welcome_links'])+menu(s,uid)[1]
     key=enqueue(s,uid,text,rows,kind='photo' if st['welcome_photo'] else 'message')
@@ -2726,7 +2727,7 @@ def joined(s,uid):
 
 def join_menu(s):
     rows=[[btn('Join '+c['title'],url=c['url'])] for c in s['settings']['force_join_channels']]
-    return '*💙 Join our community*\n\n'+md('Join ALL channels/groups below, then press Verify all joins. Join requests must be approved first. Membership checks fail closed if the bot cannot verify a channel.'),rows+[[btn('✓ Verify all joins','verifyjoin','success')],[btn('Help','help'),btn('My ID','id')]]
+    return '*💙 One step to continue*\n\n'+md('Join ALL channels below, then tap Verify all joins.\nIf your join request is still pending, approve it first.'),rows+[[btn('✓ Verify all joins','verifyjoin','success')],[btn('Help','help'),btn('My ID','id')]]
 
 def request_join(s,uid):
     u=actor(s,uid);require(str(uid).isdigit(),'Use your Telegram account for membership verification.')
@@ -2764,7 +2765,7 @@ def join_finish(s,k,v,result):
         current.update(index=result['index']+1,lease=0,next=now()+1,tries=0);return
     s['outbox'].pop(k,None);u['join_proof']={'revision':v['revision'],'until':now()+180*86400}
     activate(s,v['chat']);audit(s,v['chat'],'forcejoin.verified')
-    soft_message(s,v['chat'],'*✅ All joins verified*\n'+md('Account activated. Referral rewards, if eligible, were applied once.'),[[btn('Open dashboard','home','success')]])
+    welcome_enqueue(s,v['chat'])   # "verified" wala message hataya — seedha dashboard
 
 def settle_referral(s,rid):
     r=s['referrals'][rid]
@@ -2922,6 +2923,14 @@ def operational_tick(s):
     for a in s['apis'].values():
         if a['active'] and 0<a['expires']-now()<=86400 and a.get('expiry_notice')!=a['expires']:
             a['expiry_notice']=a['expires'];ops_log(s,'api.expiry.warning',a['owner'],a['id']+' expires within 24h')
+    # Free trial/starter: 2 din tak EK BHI call nahi → auto-deactivate + user DM + ops log
+    for a in s['apis'].values():
+        if a.get('active') and (a.get('is_trial') or a.get('is_starter')) and not a.get('calls',0) and a.get('created',0) and a['created']+2*86400<=now():
+            a['active']=False
+            kind_txt='trial' if a.get('is_trial') else 'free starter'
+            ops_log(s,'api.inactive.deactivated',a['owner'],a['id']+' — '+kind_txt+' unused for 2 days, auto-deactivated')
+            audit(s,a['owner'],'api.inactive.deactivated',a['id'])
+            soft_message(s,a['owner'],'*⏳ Auto-deactivated (unused)*\n'+md(str(a.get('name','Your API'))+'\nThis '+kind_txt+' had no response/call in 2 days, so it is paused now.\nReactivate it from My APIs, or choose another from the API Store.'),[[btn('My APIs','apis'),btn('API Store','create')]])
     if sy.get('log_verified')!=st.get('log_channel') or not st.get('log_channel') or sy.get('log_disabled'):return
     if sy.get('last_heartbeat',0)+st['heartbeat_minutes']*60<=now():
         sy['last_heartbeat']=now();ops_log(s,'💙 heartbeat','scheduler',f"v{VERSION} tick active · queue {len(s['outbox'])} · users {len(s['users'])} · APIs {len(s['apis'])} · backup {iso(sy['last_backup']) if sy.get('last_backup') else 'not run'}")
@@ -3075,7 +3084,7 @@ def simple_home(s,uid):
     u=s['users'][str(uid)]
     active=sum(a['owner']==str(uid) and a['active'] and a['expires']>now() and not (a.get('is_trial') and a.get('calls',0)>=a.get('trial_limit',0)) and not (a.get('total_limit') and a.get('calls',0)>=a['total_limit']) for a in s['apis'].values())
     display_name=' '.join(str(u.get('name') or 'Member').split()) or 'Member'
-    status='On hold' if u.get('wallet_hold') else 'Active' if u.get('active') else 'Activation needed'
+    status='On hold — contact support' if u.get('wallet_hold') else 'Active' if u.get('active') else 'Not active — tap Activate'
     text=('*💙 SR DARK*\n_API Dashboard_\n'
           +'━━━━━━━━━━━━━━━━━━\n'
           +'👤 *Name:* '+md(display_name)+'\n'
@@ -3084,7 +3093,7 @@ def simple_home(s,uid):
           +'🔑 *Active APIs:* '+md(str(active))+'\n'
           +'✅ *Status:* '+md(status)+'\n'
           +'━━━━━━━━━━━━━━━━━━\n'
-          +'_Choose an option below_')
+          +'_Tap a button below — this same message updates in place._')
     rows=[[btn('API Store','create'),btn('My APIs','apis')],[btn('Buy Credits','buy','success'),btn('Wallet','wallet')],[btn('Invite & Earn','refs'),btn('Help','help')]]
     if not u.get('active'):rows.insert(0,[btn('Activate','activate','success')])
     if s['settings'].get('starter_enabled'):rows.insert(1 if not u.get('active') else 0,[btn('🎁 Claim Free API','starter','success')])
@@ -3188,7 +3197,7 @@ ADMIN_COMMANDS=[('commands','All controls as buttons'),('delivery','Private cred
     ('panel','Admin CRUD panel'),('setwelcome','Select welcome photo'),('setvideo','Select welcome video'),('dashboard','Use dynamic welcome dashboard'),('sources','Source IDs'),('addsource','Publish a customer source'),('addplan','Add source pricing plan'),
     ('removesticker','Remove welcome sticker'),('botstyle','Bot appearance'),('setmessage','Capture formatted welcome'),
     ('setwelcomemd','Set Markdown welcome'),('setcampaign','Capture campaign text'),('confirm','Confirm protected changes'),('cancel','Cancel admin wizard')]
-OWNER_COMMANDS=[('support','Customer support inbox'),('approvals','Review pending sensitive actions'),('forcejoin','Add required group/channel with picker'),('loghere','Connect private logs group: send there'),('addcredit','Credit coins with confirmation'),('createredeem','Create limited-use redeem code'),('revokeredeem','Revoke a redeem code'),('logs','Verify private logs destination'),('operations','Force-join and private logs'),('setbuttonemoji','Capture button custom emoji'),('backup','Request encrypted backup')]
+OWNER_COMMANDS=[('support','Customer support inbox'),('approvals','Review pending sensitive actions'),('forcejoin','Add required group/channel with picker'),('loghere','Connect private logs group: send there'),('addcredit','Credit coins with confirmation'),('createredeem','Create limited-use redeem code'),('shareplans','Ready plan message · optional bot send'),('revokeredeem','Revoke a redeem code'),('logs','Verify private logs destination'),('operations','Force-join and private logs'),('setbuttonemoji','Capture button custom emoji'),('backup','Request encrypted backup')]
 
 def commands_for(s,uid):
     admin=is_admin(uid,s) and not s['users'].get(str(uid),{}).get('blocked')
@@ -3225,7 +3234,7 @@ def admin_help(s,uid):
     text='*🛠 Admin help*\n\n'+md('/admin — admin controls, users, logs and pending referrals\n/adminstats — workspace daily statistics\n/panel — full CRUD panel\n/confirm — fresh confirmation for protected changes\n\nWelcome and campaigns\n/setwelcome — send a selected photo\n/setvideo — send an original welcome video\n/dashboard — dynamic welcome without a separate sticker\n/botstyle — appearance and previews\n/setmessage — capture Telegram-formatted welcome\n/setwelcomemd — set a Markdown welcome\n/setcampaign CAMPAIGN_ID — capture campaign formatting\n/cancel — leave an admin wizard')
     if role(uid,s)=='superadmin':
         text+='\n\n'+md('Owner controls\n/operations — manually customize force-join, private logs, heartbeat and quota warnings\n/setbuttonemoji all — one custom emoji for all buttons; primary/success/danger set individual colours\n/backup — queue an encrypted database snapshot\nRoles and wallet policy are managed in the protected web panel. Firebase owner UIDs and credentials stay in private server CONFIG.')
-    text+='\n\n'+md('/adminapis — all customer endpoints; edit limits/auth\n/loghere — owner: send in private logs group with bot admin\n/sources — list source IDs\n/addsource — guided source publishing\n/addplan SOURCE_ID Name | COINS | DAYS | DAILY | RPM | TOTAL\n/dashboard — dynamic dashboard, no sticker\n/setvideo — upload your original welcome video\nOwner: /addcredit USER_ID COINS UNIQUE_REFERENCE\nOwner: /createredeem COINS MAX_USERS DAYS\nOwner: /revokeredeem RECORD_ID')
+    text+='\n\n'+md('/adminapis — all customer endpoints; edit limits/auth\n/loghere — owner: send in private logs group with bot admin\n/sources — list source IDs\n/addsource — guided source publishing\n/addplan SOURCE_ID Name | COINS | DAYS | DAILY | RPM | TOTAL\n/dashboard — dynamic dashboard, no sticker\n/setvideo — upload your original welcome video\nOwner: /addcredit USER_ID COINS UNIQUE_REFERENCE\nOwner: /createredeem COINS MAX_USERS DAYS\nOwner: /shareplans — ready plan message, optional bot send\nOwner: /revokeredeem RECORD_ID')
     text+='\n\n'+md('/broadcast — draft, private preview, one-time/daily schedule and confirmation. /logs — owner verifies private logs.\nThe bot must be admin in required groups/channels and the private log destination. Verify the log destination in Operations. Backups and scheduled messages require the running embedded worker or an authenticated external scheduler. New users join the broadcast audience on /start; historical exclusions and Telegram blocks are respected. Custom emoji support depends on Telegram eligibility; sticker files are not button icons.')
     return text,[[btn('Admin controls','admin'),btn('Admin stats','adminstats')],[btn('Same emoji on all buttons','captureicon:all')],[btn('Appearance','botstyle')]]
 
@@ -3602,7 +3611,11 @@ def nav_job(s,key,uid,update=None):
     anchor={} if u.get('nav_recovery_pending') else u.get('bot_nav',{})
     if u.get('nav_recovery_pending'):
         j.pop('edit_message_id',None);j.pop('edit_caption',None);j.pop('photo',None);j.pop('video',None);j['kind']='message'
-    if not valid_nav(anchor) and update and not u.get('nav_recovery_pending'):
+    # Callback ho to USI tapse hue message ko edit karo — purane nav anchor (upar wala) nahi
+    if update and isinstance(update.get('callback_query'),dict) and not u.get('nav_recovery_pending'):
+        target=callback_edit_target(update,j)
+        if target:anchor={'id':target['edit_message_id'],'caption':target.get('edit_caption',False)}
+    elif not valid_nav(anchor) and update and not u.get('nav_recovery_pending'):
         target=callback_edit_target(update,j)
         if target:anchor={'id':target['edit_message_id'],'caption':target.get('edit_caption',False)}
     if valid_nav(anchor):
@@ -3925,7 +3938,7 @@ def process_bot(s,update):
     if not cb and first=='/start' and not u.get('broadcast_hold'):
         if not u.get('updates_on'):audit(s,uid,'broadcast.auto-enrolled','Real /start; automatic announcement policy available in Help')
         u['updates_on']=True
-    action=raw if cb and not command_button else {"/contact":"paysupport","/commands":"commands:0","/freeapi":"starter","/delivery":"delivery","/approvals":"approvals","/forcejoin":"forcejoin","/planel":"panel","/loghere":"loghere","/start":"home","/help":"help","/redeem":"redeem","/createredeem":"createredeem","/revokeredeem":"revokeredeem","/addcredit":"addcredit","/sources":"sources","/addsource":"addsource","/addplan":"addplan","/setvideo":"setvideo","/dashboard":"dashboard","/trial":"trial","/demo":"trial","/menu":"home","/apis":"apis","/create":"create","/buyapi":"create","/referral":"refs","/panel":"panel","/admin":"admin","/adminapis":"adminapis","/adminhelp":"adminhelp","/backup":"backup","/cancel":"home","/id":"id","/stats":"mystats","/daily":"mystats","/adminstats":"adminstats","/verify":"verifyjoin","/operations":"operations","/setmessage":"setmessage","/setwelcomemd":"setwelcomemd","/setcampaign":"setcampaign","/setbuttonemoji":"setbuttonemoji","/confirm":"confirm","/wallet":"wallet","/buy":"buy","/developer":"developer","/paysupport":"paysupport","/terms":"terms","/broadcast":"broadcast","/logs":"testlogs","/setwelcome":"setwelcome","/setsticker":"setsticker","/removesticker":"removesticker","/botstyle":"botstyle"}.get(first,"")
+    action=raw if cb and not command_button else {"/contact":"paysupport","/commands":"commands:0","/freeapi":"starter","/delivery":"delivery","/approvals":"approvals","/forcejoin":"forcejoin","/planel":"panel","/loghere":"loghere","/start":"home","/help":"help","/redeem":"redeem","/createredeem":"createredeem","/shareplans":"shareplans","/revokeredeem":"revokeredeem","/addcredit":"addcredit","/sources":"sources","/addsource":"addsource","/addplan":"addplan","/setvideo":"setvideo","/dashboard":"dashboard","/trial":"trial","/demo":"trial","/menu":"home","/apis":"apis","/create":"create","/buyapi":"create","/referral":"refs","/panel":"panel","/admin":"admin","/adminapis":"adminapis","/adminhelp":"adminhelp","/backup":"backup","/cancel":"home","/id":"id","/stats":"mystats","/daily":"mystats","/adminstats":"adminstats","/verify":"verifyjoin","/operations":"operations","/setmessage":"setmessage","/setwelcomemd":"setwelcomemd","/setcampaign":"setcampaign","/setbuttonemoji":"setbuttonemoji","/confirm":"confirm","/wallet":"wallet","/buy":"buy","/developer":"developer","/paysupport":"paysupport","/terms":"terms","/broadcast":"broadcast","/logs":"testlogs","/setwelcome":"setwelcome","/setsticker":"setsticker","/removesticker":"removesticker","/botstyle":"botstyle"}.get(first,"")
     if first=="/start" and args in ("panel","confirm","trial","demo"): action=args
     if focused_ui(s):
         if first in ('/stats','/stat') and is_admin(uid,s):action='adminstats'
@@ -3940,6 +3953,12 @@ def process_bot(s,update):
     checkpoint=copy.deepcopy(s)
     try:
         if not is_admin(uid,s) and not joined(s,uid) and action not in (('id','help','verifyjoin','paysupport','contacthelp') if focused_ui(s) else ('id','help','verifyjoin')):
+            if first=='/start':
+                # Automatic detect: turant membership check — joined hai to seedha
+                # dashboard aayega (join_finish), nahi hai to join menu (fail path).
+                try:
+                    request_join(s,uid);return True      # silent — koi extra message nahi
+                except Problem: pass                     # throttle/busy → menu fallback
             text,rows=join_menu(s)
             if first=='/start':
                 welcome_enqueue(s,uid,keyboard=rows);return True
@@ -4060,8 +4079,10 @@ def process_bot(s,update):
         elif action=='createredeem':
             actor(s,uid,superonly=True);parts=args.split();require(len(parts)==3,'Use /createredeem COINS MAX_USERS DAYS. Example: /createredeem 50 10 7')
             r=create_redeem(s,uid,{k:command_number(v,k) for k,v in zip(('coins','uses','days'),parts)})
-            text='*Redeem code created*\n'+code(r['code'])+'\n'+md(f"{r['coins']} coins · {r['uses']} users · expires {iso(r['expires'])}\nRecord: {r['id']}\nSave the code; only its hash remains after delivery. Do not publish unintentionally.")
-            rows=[[{'text':'Copy code','copy_text':{'text':r['code']}}],[btn('Admin','admin')]]
+            share='*🎁 Free coin gift*\n'+md('Redeem code: '+r['code']+'\n'+str(r['coins'])+' coins · '+str(r['uses'])+' users · till '+iso(r['expires'])+'\n\nRedeem in the bot: /redeem '+r['code'])
+            u['flow']={'step':'msgshare','t':now(),'draft':{'text':share}}
+            text='*Redeem code created*\n'+code(r['code'])+'\n'+md(f"{r['coins']} coins · {r['uses']} users · expires {iso(r['expires'])}\nRecord: {r['id']}\nReady message is below — send it to a user (optional) or share it yourself.")
+            rows=[[{'text':'Copy code','copy_text':{'text':r['code']}}],[btn('Send to user','sendmsg','success'),btn('Done','admin')]]
         elif action=='revokeredeem':
             actor(s,uid,superonly=True);require(bool(args),'Use /revokeredeem RECORD_ID (shown when creating the code).')
             text=md(admin_action(s,uid,'redeem',{'revoke':True,'id':args})['message'])
@@ -4075,6 +4096,37 @@ def process_bot(s,update):
         elif action=='creditconfirm':
             actor(s,uid,superonly=True);f=u.get('flow',{});require(f.get('step')=='credit_confirm' and f['t']+300>now(),'Credit confirmation expired.')
             r=grant_credit(s,uid,f['draft']);u['flow']={};text=md(r['message'])
+        elif action=='shareplans':
+            # Superadmin: sab enabled sources ka READY plan message — copy ya bot se bhejo (optional)
+            actor(s,uid,superonly=True)
+            lines=[]
+            for cid,c in sorted(s['catalog'].items(),key=lambda kv:kv[1]['name'].lower()):
+                if not c.get('enabled'):continue
+                if c.get('plans'):
+                    for p in c['plans']:
+                        if p.get('enabled',True):
+                            lines.append(md(c['name']+' → '+str(p['price'])+' coins · '+str(p['days'])+' days · '+str(p['daily'])+'/day'));break
+                else:
+                    currency,price=api_price(s,c);lines.append(md(c['name']+' → '+str(price)+' '+currency))
+            share='*📋 SR DARK API plans*\n\n'+(('\n'.join(lines[:12])) if lines else md('No sources enabled yet.'))+'\n\n'+md('Buy: /create · Free starter: /freeapi · My APIs: /apis')
+            u['flow']={'step':'msgshare','t':now(),'draft':{'text':share}}
+            text=share
+            rows=[[btn('Send to user','sendmsg','success'),btn('Done','admin')]]
+        elif action=='sendmsg':
+            actor(s,uid,superonly=True);f=u.get('flow',{})
+            require(f.get('step')=='msgshare' and f.get('t',0)+600>now(),'Message expired — run the command again.')
+            u['flow']={'step':'msgshare_uid','t':now(),'draft':f['draft']}
+            text=md('Send the USER ID to deliver this message to. They must have started the bot.\n/cancel to skip — the preview above stays for copying.')
+            rows=[[btn('Cancel','admin')]]
+        elif not cb and u.get('flow',{}).get('step')=='msgshare_uid' and not first.startswith('/'):
+            actor(s,uid,superonly=True);f=u['flow']
+            require(f.get('t',0)+600>now(),'Expired — run the command again.')
+            target=raw.strip()
+            require(target.isdigit() and target in s['users'],'Send a valid USER ID of someone who has started the bot.')
+            soft_message(s,target,f['draft']['text'],[[btn('Open bot menu','home','success')]])
+            u['flow']={};audit(s,uid,'msgshare.sent',target)
+            text=md('Message delivered to '+target+'.')
+            rows=[[btn('Admin','admin')]]
         elif action=='adminapis' or action.startswith('adminapis:'):
             actor(s,uid,admin=True);page=int(action.split(':',1)[1]) if ':' in action else 0;require(0<=page<=100,'Invalid page.')
             entries=sorted(s['apis'].values(),key=lambda a:a['created'],reverse=True);part=entries[page*8:(page+1)*8]
@@ -4408,7 +4460,7 @@ def process_bot(s,update):
             if role(uid,s)=="superadmin": rows.append([btn("Request backup","backup","success")])
             rows.append([btn('All buttons','commands:0'),btn('Broadcast','broadcast')])
             if focused_ui(s) and not simple_ui(s) and uid in SUPER_IDS:rows.append([btn('Customer inbox','supportinbox')])
-            if uid in SUPER_IDS:rows.append([btn('Approvals','approvals'),btn('Force join','forcejoin')])
+            if uid in SUPER_IDS:rows.append([btn('Approvals','approvals'),btn('Force join','forcejoin'),btn('Share plans','shareplans')])
             rows.append([btn("All APIs / edit","adminapis"),btn("Admin help","adminhelp")])
             rows.append([btn("Home","home")])
         elif action=="adminusers":
@@ -4612,7 +4664,7 @@ def drain(limit=4,budget=12,chat=None,job_id=None):
                     target=v.get('support_target')
                     if not u or u.get('blocked') or (target and v['chat']!=target and v['chat'] not in SUPER_IDS) or (not target and v['chat'] not in SUPER_IDS):
                         del s['outbox'][k];continue
-                if focused_ui(s) and v.get('nav') and u:
+                if focused_ui(s) and v.get('nav') and u and not v.get('from_cb'):
                     if v.get('nav_epoch',0)!=u.get('nav_epoch',0):del s['outbox'][k];continue
                     if u.get('nav_recovery_pending'):
                         v.pop('edit_message_id',None);v.pop('edit_caption',None);v.pop('photo',None);v.pop('video',None);v['kind']='message'
@@ -4922,12 +4974,11 @@ def webhook():
             if job['chat']==reply_chat and job.get('kind') in ('message','photo','sticker','invoice','joincheck','logverify','joinsetup','api_receipt'):
                 job['priority']=min(job.get('priority',0),-2)
                 target=callback_edit_target(update,job)
+                if target:job['from_cb']=True   # tapped message hi rahega — anchor se override nahi hoga
                 if v415_enabled(state) and not focused_ui(state) and job.get('kind') in ('message','photo') and not str(cb.get('data','') if cb else '').startswith(('approve:','reject:','broadcastconfirm')) and not job.get('receipt') and not job.get('reply_keyboard') and not any(x in job.get('text','') for x in ('Secure panel login','one-time code','confirmation code','New API key')):
                     job['nav']=True
-                    anchor=state['users'].get(reply_chat,{}).get('bot_nav',{})
-                    typed_cmd=not cb and str((update.get('message') or {}).get('text') or '').startswith('/')
-                    if not cb and not typed_cmd and job.get('kind')=='message' and anchor.get('t',0)+86400>now() and anchor.get('id') and (not anchor.get('caption') or text_units(job['text'])<=1024):
-                        target={'edit_message_id':anchor['id'],'edit_caption':anchor.get('caption',False)}
+                    # typed text/command ab HAMESHA naya message (niche) — anchor edit nahi;
+                    # buttons pehle hi same-message edit karte hain (callback_edit_target).
                 if focused_ui(state):
                     nav_job(state,key,reply_chat,update);target=None
                 if target:
