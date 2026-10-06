@@ -97,7 +97,6 @@ from flask.json.provider import DefaultJSONProvider
 
 # OPTIONAL ENV: fill these values directly for a private, server-only deployment.
 CONFIG = {
-    "BOOTSTRAP_V420_STREAMLINED_UI": True,
     "BOOTSTRAP_V4181_COMMUNITY_PLAN": True,
     "BOOTSTRAP_V4171_CHAT_URLS": True,'BOOTSTRAP_V4151_EMOJI': True,
  'BOOTSTRAP_V415_CONTROLS': True,
@@ -161,7 +160,7 @@ def cfg(k):
     if k=='BASE_URL' and not value:value=os.environ.get('RENDER_EXTERNAL_URL','').rstrip('/')
     return value
 DEMO = "--demo" in sys.argv or os.environ.get("SRD_DEMO") == "1"
-VERSION = "4.20.0"
+VERSION = "4.18.1"
 LOG = logging.getLogger("srdark")
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 SUPER_IDS = {x.strip() for x in str(cfg("SUPER_ADMIN_IDS")).split(",") if x.strip().isdigit()}
@@ -178,7 +177,7 @@ DEFAULTS = {
 
     "trial_enabled": True, "trial_minutes": 20, "trial_requests": 100, "trial_rpm": 30,
     "developer_username": "DroidDeveloper",
-    "bot_user_rpm": 45, "bot_admin_rpm": 90, "focused_bot_ui": False, "streamlined_bot_ui": False, "supplied_emoji_enabled": False, "force_join_channels": [], "log_channel": str(cfg("INITIAL_LOG_CHANNEL") or "").strip(), "heartbeat_minutes": 60, "daily_report_hour": 0,
+    "bot_user_rpm": 45, "bot_admin_rpm": 90, "focused_bot_ui": False, "supplied_emoji_enabled": False, "force_join_channels": [], "log_channel": str(cfg("INITIAL_LOG_CHANNEL") or "").strip(), "heartbeat_minutes": 60, "daily_report_hour": 0,
     "quota_warn_percent": 80, "button_icons": {}, "referral_new_user_reward": 50,
     "welcome_mode": "plain", "welcome_entities": [],
     "welcome_sticker": "", "welcome_sticker_info": {}, "bot_text_style": "compact",
@@ -266,6 +265,7 @@ def normalize(s):
         a.setdefault('billing_currency','coins');a.setdefault('price',old.get('default_api_price',250))
     s["settings"] = {**DEFAULTS, **old}
     bootstrap_validation_sources(s)
+    s["settings"]["owner_approval_required"]=False   # v4.18: superadmin approval requests hataye (HTML me request nahi jayegi)
     flag=cfg('BOOTSTRAP_DASHBOARD_WELCOME')
     if (flag is True or str(flag).lower() in ('1','true','yes')) and not s['system'].get('v413_dashboard'):
         s['settings'].update(welcome_dashboard=True,welcome_sticker='',welcome_sticker_info={})
@@ -316,17 +316,6 @@ def normalize(s):
         # Existing join proofs/pending checks have an old revision and must not qualify.
         for u in s['users'].values():u.pop('join_proof',None)
         s['system']['v4181_community_plan']=True
-    flag=cfg('BOOTSTRAP_V420_STREAMLINED_UI')
-    if (flag is True or str(flag).lower() in ('1','true','yes')) and not s['system'].get('v420_streamlined_ui'):
-        s['settings']['streamlined_bot_ui']=True;s['system']['v420_streamlined_ui']=True
-    # Activate only the explicitly staged Music Search source on a raw-JSON-capable build.
-    music=s['catalog'].get('cat_music_search')
-    if (music and music.get('activate_after_feature')=='original-proxy-json-v1'
-            and music.get('mode')=='proxy' and music.get('param')=='song'
-            and music.get('response_format')=='original'
-            and music.get('url')=='https://suryansh-music-search-download-api.vercel.app/search?song='
-            and 'suryansh-music-search-download-api.vercel.app' in s['settings'].get('allowed_hosts',[])):
-        music['enabled']=True;music.pop('activate_after_feature',None)
     return s
 class Problem(Exception):
     def __init__(self, message, status=400, code="INVALID_REQUEST"):
@@ -504,11 +493,11 @@ def chat_url_credentials(a,result,title):
     require(text_units(text)<=4000,'Credential message is too long; shorten the public example value.',409)
     return {'text':text,'entities':entities}
 
-def enqueue_api_receipt(s,uid,result,title,force_chat_url=False):
+def enqueue_api_receipt(s,uid,result,title):
     require(str(uid).isdigit() and bool(result.get('credential_text')),'Private Telegram receipt unavailable.')
     aid=result['id'];a=s['apis'].get(aid);require(a and (a['owner']==str(uid) or is_admin(uid,s)),'Receipt access denied.',403)
-    mode='text' if force_chat_url else credential_delivery_mode(s,uid)
-    linked=force_chat_url or mode=='text' and s['settings'].get('chat_keyed_receipts',False)
+    mode=credential_delivery_mode(s,uid)
+    linked=mode=='text' and s['settings'].get('chat_keyed_receipts',False)
     plaintext=json.dumps(chat_url_credentials(a,result,title),ensure_ascii=False) if linked else safe_chat_credentials(result) if mode=='text' else result['credential_text']
     key=enqueue(s,uid,title+(' — private credential text.' if mode=='text' else ' — credentials are in the private TXT attachment.'),[[btn('My APIs','apis'),btn('Home','home')]],kind='api_receipt')
     s['outbox'][key].update(receipt_enc=fernet().encrypt(plaintext.encode()).decode(),receipt_format='chat_url' if linked else mode,receipt_api_id=aid,
@@ -1033,8 +1022,6 @@ def bot_username(state=None):
         return _IDENTITY_CACHE["username"] or fallback
 
 def api_links(state,a,key):
-    if streamlined_ui(state) and key and hmac.compare_digest(a["key_hash"],digest(key)):
-        a["credential_enc"]=fernet().encrypt(json.dumps({"id":a["id"],"owner":a["owner"],"key":key}).encode()).decode()
     base=str(cfg("BASE_URL")).rstrip("/")
     if DEMO and not base:
         base=request.host_url.rstrip("/") if has_request_context() else "http://localhost:8080"
@@ -1123,10 +1110,6 @@ def source_validate(d, settings):
         "Example value: up to 200 characters, no control characters.")
     require(bool(re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{0,30}",result["param"])),"Invalid query parameter.")
     require(result["param"]!="key","The parameter name key is reserved for authentication; use value instead.")
-    if 'response_format' in d:
-        require(d['response_format'] in ('wrapped','original'),'Choose wrapped or original JSON response.')
-        require(d['response_format']=='wrapped' or mode=='proxy','Original JSON is available only for proxy sources.')
-        result['response_format']=d['response_format']
     if 'demo_response' in d:
         validate_json_tree(d['demo_response'])
         require(len(json.dumps(d['demo_response'],ensure_ascii=False).encode())<=1200,'Demo response must be a small synthetic JSON sample (up to 1200 bytes).')
@@ -1144,7 +1127,10 @@ def source_validate(d, settings):
     else:
         u=re.sub(r"&(?:amp;)+", "&", str(d.get("url","")).strip()); p=urllib.parse.urlsplit(u)
         require(len(u)<=2000 and p.scheme=="https" and p.hostname and not p.username and not p.password and p.port in (None,443) and not p.fragment,"Only HTTPS URLs on port 443 without credentials/fragments.")
-        require(p.hostname.lower() in settings["allowed_hosts"],"Source host must be approved in Settings → allowed_hosts. Only an owner may approve an exact trusted hostname; a source URL does not approve itself.",400,"SOURCE_HOST_NOT_APPROVED")
+        host=p.hostname.lower()
+        if host not in settings["allowed_hosts"]:
+            require(len(settings["allowed_hosts"])<60,"Approved-hosts limit full — remove old hosts in Settings.",400,"SOURCE_HOSTS_FULL")
+            settings["allowed_hosts"]=list(settings["allowed_hosts"])+[host]  # source save = host approval (koi superadmin request nahi)
         result["url"]=u
     return result
 
@@ -1324,7 +1310,7 @@ def api_action(s,uid,aid,action,d=None):
         if a["mode"]=="catalog":
             name=str(d.get("name",a["name"])).strip(); require(1<=len(name)<=60,"Invalid name."); a["name"]=name
         else:
-            src=source_validate({**a,**{k:d[k] for k in ("name","mode","url","param","data","example_value","response_format") if k in d}},st)
+            src=source_validate({**a,**{k:d[k] for k in ("name","mode","url","param","data","example_value") if k in d}},st)
             if src["mode"] in ("proxy","validation"): require(bool(src["example_value"]),"Set an example value before saving this proxy API.")
             a.update(src)
         if is_admin(uid,s):
@@ -1351,9 +1337,6 @@ def api_action(s,uid,aid,action,d=None):
 
 def admin_action(s,uid,kind,d):
     actor(s,uid,admin=True)
-    if kind=='catalog_json':
-        require(set(d)=={'source_json'},'Send only source_json.')
-        return admin_action(s,uid,'catalog',source_config_json(d['source_json']))
     if kind=='credit':return grant_credit(s,uid,d)
     if kind=='redeem':
         actor(s,uid,superonly=True)
@@ -1425,7 +1408,7 @@ def admin_action(s,uid,kind,d):
     raise Problem("Unknown admin action.")
 
 def redact_api(a,admin=False):
-    a=copy.deepcopy(a); a.pop("key_hash",None); a.pop("credential_enc",None)
+    a=copy.deepcopy(a); a.pop("key_hash",None)
     if not admin and a["mode"]=="catalog": a.pop("url",None); a.pop("data",None)
     a["used"]=a.get("used",0) if a.get("day")==utc_day() else 0
     a["status"]="paused" if not a["active"] else ("expired" if a["expires"]<=now() else "active")
@@ -1500,6 +1483,11 @@ def fetch_source(url,param,value,allowed,limit):
     p=urllib.parse.urlsplit(url); host=p.hostname
     require(host in allowed and p.scheme=="https" and p.port in (None,443),"Source host no longer approved.",502,"UPSTREAM_BLOCKED")
     query=urllib.parse.parse_qsl(p.query,keep_blank_values=True)
+    # swap/append style: agar configured param URL me nahi hai par URL ka ek khali param
+    # hai (jaise .../search?song=) to value USI me jaye — jaisa admin ne URL me likha.
+    if param not in {k for k,_ in query}:
+        empty=[k for k,v in query if v=="" and re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{0,30}",k or "")]
+        if len(empty)==1:param=empty[0]
     query=[(k,v) for k,v in query if k!=param]+[(param,value)]
     path=urllib.parse.urlunsplit(("","",p.path or "/",urllib.parse.urlencode(query),""))
     try:
@@ -1587,11 +1575,11 @@ def reserve_call(s,aid,key,query,header_authenticated=False):
     elif a['used']*100>=a['daily']*st['quota_warn_percent']:quota_notice(s,a,'Quota nearly used')
     return copy.deepcopy((a,src,st,value))
 
-def redact_provider_credentials(data,source,hide_provider=True):
+def redact_provider_credentials(data,source):
     url=source.get('url','');parts=urllib.parse.urlsplit(url)
     names={'key','api_key','apikey','token','access_token','secret','password','authorization'}
     secrets_to_hide={v for k,v in urllib.parse.parse_qsl(parts.query) if k.lower() in names and v}
-    if hide_provider:secrets_to_hide.update({url,parts.scheme+'://'+parts.netloc})
+    secrets_to_hide.update({url,parts.scheme+'://'+parts.netloc})
     secrets_to_hide.discard('')
     def clean(value):
         if isinstance(value,dict):return {k:('[redacted]' if k.lower() in names else clean(v)) for k,v in value.items()}
@@ -1656,19 +1644,10 @@ def invoke(aid):
     try:
         if local and local["error"]:raise local["error"]
         data=local["data"] if local else src["data"] if src["mode"]=="static" else validation_result(src["validator"],value) if src["mode"]=="validation" else fetch_source(src["url"],src["param"],value,st["allowed_hosts"],st["max_payload_kb"]*1024)
-        original=src['mode']=='proxy' and src.get('response_format')=='original'
-        if not local and not original:data=transform(data,st)
-        if src["mode"]=="proxy":data=redact_provider_credentials(data,src,hide_provider=not original)
+        if not local:data=transform(data,st)
+        if src["mode"]=="proxy":data=redact_provider_credentials(data,src)
         require(len(json.dumps(data,ensure_ascii=False).encode())<=st["max_payload_kb"]*1024,"Transformed response exceeds payload limit.",502,"RESPONSE_SIZE")
         ok=True
-        if original:
-            # Preserve the upstream JSON shape/links; auth, quota, expiry, size limits and
-            # credential redaction still apply. Gateway errors keep the normal error format.
-            response=jsonify(data)
-            response.headers['X-Daily-Limit']=str(a['daily'])
-            response.headers['X-Daily-Remaining']=str(max(0,a['daily']-a['used']))
-            response.headers['X-API-Expires']=iso(a['expires'])
-            return response
         return jsonify(ok=True,data=data,expires=iso(a["expires"]),daily_limit=a["daily"],daily_used=a["used"],daily_remaining=max(0,a["daily"]-a["used"]),total_calls=a["calls"],plan_name=a.get("plan_snapshot",{}).get("name",""),total_limit=a.get("total_limit",0),total_remaining=max(0,a["total_limit"]-a["calls"]) if a.get("total_limit") else None,reset="No reset: total trial budget" if a.get("is_trial") else "00:00 UTC",**({"plan":"trial","trial_limit":a["trial_limit"],"trial_remaining":max(0,a["trial_limit"]-a["calls"]),"trial_expires":iso(a["trial_deadline"])} if a.get("is_trial") else {}))
     finally:
         g.api_timings["compute"]=round((time.monotonic()-t)*1000,2)
@@ -1909,7 +1888,7 @@ def body():
     d=request.get_json(silent=True); require(isinstance(d,dict),"Valid JSON object required; duplicate keys/non-finite numbers are rejected."); validate_json_tree(d); return d
 
 @app.get("/health")
-def health(): return jsonify(ok=store is not None,version=VERSION,mode="demo" if DEMO else "production",build="PRIVATE-UX-420"),200 if store else 503
+def health(): return jsonify(ok=store is not None,version=VERSION,mode="demo" if DEMO else "production",build="PRIVATE-COMMUNITY-4181"),200 if store else 503
 @app.get("/manage/state")
 @protected()
 def state_route(uid): return jsonify(public_state(store.read(),uid))
@@ -1963,7 +1942,7 @@ def bot_connection_route(uid):
 @protected(admin=True)
 def admin_route(uid,kind):
     d=body()
-    sensitive=kind in ("settings","catalog","catalog_json","kv","redeem","credit") or (kind=="user" and (any(k in d for k in ("role","coins","diamonds","delete")) or d.get("blocked") is False))
+    sensitive=kind in ("settings","kv","redeem","credit") or (kind=="user" and (any(k in d for k in ("role","coins","diamonds","delete")) or d.get("blocked") is False))
     return jsonify(user_tx(uid,lambda s:admin_action(s,uid,kind,d),elevated=sensitive))
 @app.post('/manage/notifications/read')
 @protected(admin=True)
@@ -2773,7 +2752,6 @@ def join_probe(s,v):
     return {'joined':ok,'index':i,'title':channels[i]['title']}
 
 def join_finish(s,k,v,result):
-    if v.get("silent_join"):return quiet_join_finish(s,k,v,result)
     u=s['users'].get(v['chat']);current=s['outbox'].get(k)
     if not current:return
     if not u or u.get('blocked') or result.get('stale') or v['revision']!=join_revision(s):
@@ -2784,7 +2762,7 @@ def join_finish(s,k,v,result):
         return
     if result['index']+1<len(s['settings']['force_join_channels']):
         current.update(index=result['index']+1,lease=0,next=now()+1,tries=0);return
-    s['outbox'].pop(k,None);u['join_proof']={'revision':v['revision'],'until':now()+300}
+    s['outbox'].pop(k,None);u['join_proof']={'revision':v['revision'],'until':now()+180*86400}
     activate(s,v['chat']);audit(s,v['chat'],'forcejoin.verified')
     soft_message(s,v['chat'],'*✅ All joins verified*\n'+md('Account activated. Referral rewards, if eligible, were applied once.'),[[btn('Open dashboard','home','success')]])
 
@@ -3108,8 +3086,8 @@ def simple_home(s,uid):
           +'━━━━━━━━━━━━━━━━━━\n'
           +'_Choose an option below_')
     rows=[[btn('API Store','create'),btn('My APIs','apis')],[btn('Buy Credits','buy','success'),btn('Wallet','wallet')],[btn('Invite & Earn','refs'),btn('Help','help')]]
-    if streamlined_ui(s):rows.insert(1,[btn('Free API','starter','success'),btn('Trial','trial')])
     if not u.get('active'):rows.insert(0,[btn('Activate','activate','success')])
+    if s['settings'].get('starter_enabled'):rows.insert(1 if not u.get('active') else 0,[btn('🎁 Claim Free API','starter','success')])
     if is_admin(uid,s):rows.append([btn('Admin','admin'),btn('Admin Panel','panel')])
     return text,rows
 
@@ -3118,11 +3096,11 @@ def credit_signature(pack):return digest(json.dumps({k:pack[k] for k in ('id','a
 def simple_credits(s,uid,page=0):
     packs=[p for p in s['settings']['purchase_packs'] if p['enabled'] and p['currency']=='coins']
     pages=max(1,(len(packs)+5)//6);page=max(0,min(page,pages-1));part=packs[page*6:(page+1)*6]
-    text='*Buy Credits*\n\n'+md('Balance: '+str(s['users'][str(uid)]['coins'])+' credits (coins)\nChoose a pack. Pay securely with Telegram Stars.\nCredits are added after successful payment.')
+    text='*Buy Credits*\n\n'+md('Balance: '+str(s['users'][str(uid)]['coins'])+' credits (coins)\nChoose a pack. Pay the owner directly in DM (UPI).\nCredits are added after the owner confirms your payment.')
     rows=[]
     for p in part:
         text+='\n\n'+md(str(p['amount'])+' credits  •  '+str(p['stars'])+' Stars')
-        rows.append([btn('Buy '+str(p['amount'])+' credits · '+str(p['stars'])+' Stars','creditbuy:'+p['id']+':'+credit_signature(p),'success')])
+        rows.append([btn('Buy '+str(p['amount'])+' credits · DM payment','dmorder:'+p['id']+':'+credit_signature(p),'success')])
     if not packs:text+='\n\n'+md('No credit packs available yet.')
     nav=[]
     if page:nav.append(btn('Back','creditpage:'+str(page-1)))
@@ -3145,6 +3123,31 @@ def simple_customer_action(s,uid,action,raw,cb):
         u['flow']={};return simple_credits(s,uid)
     if action.startswith('creditpage:'):
         value=action.split(':')[1];require(value.isdigit() and len(value)<=6,'Invalid page.');u['flow']={};return simple_credits(s,uid,int(value))
+    if action.startswith('dmorder:'):
+        _,pid,quote=action.split(':',2)
+        p=next((p for p in s['settings']['purchase_packs'] if p['id']==pid and p['enabled'] and p['currency']=='coins'),None)
+        require(p and hmac.compare_digest(credit_signature(p),quote),'Pack changed. Open Buy Credits again.',409)
+        uu=actor(s,uid);require(uu.get('active'),'Activate your account first.',403)
+        require(not uu.get('wallet_hold'),'Resolve your wallet hold with payment support first.',403)
+        require(sum(o['uid']==str(uid) and o['status']=='pending' and o['created']>now()-86400 for o in s['orders'].values())<5,'You already have 5 pending orders. Wait for one to complete.',429)
+        economy_capacity(s)
+        oid=new_id('ord_');ref='dm'+oid.replace('ord_','')[:24]
+        s['orders'][oid]={'id':oid,'uid':str(uid),'method':'upi','pack_id':p['id'],'name':p['name'],'currency':p['currency'],
+            'amount':p['amount'],'stars':p.get('stars',0),'inr_paise':p.get('inr_paise',0),'status':'pending','created':now(),
+            'payload':'srdark:'+oid,'reference':ref,'terms':s['settings']['payment_terms']}
+        s['manual_refs'][digest(ref.lower())]=oid
+        audit(s,uid,'payment.dm-requested',oid)
+        for owner in sorted(SUPER_IDS):
+            soft_message(s,owner,'*DM purchase request*\n'+md(str(uid)+' ordered '+str(p['amount'])+' '+str(p['currency'])+' · '+p['name']+'\nOrder: '+oid+'\nWait for the customer UPI reference, then approve in the web panel.'),
+                [[btn('Wallet','wallet')]])
+        owner_name=s['settings'].get('support_username','')
+        link=('https://t.me/'+owner_name) if owner_name else (('tg://user?id='+sorted(SUPER_IDS)[0]) if SUPER_IDS else None)
+        uu['flow']={}
+        text=md('Order created: '+str(p['amount'])+' '+str(p['currency'])+' · '+p['name']+'\nPay via UPI in DM with the owner and share your payment reference. Credits are added after the owner confirms it.')
+        rows=[]
+        if link:rows.append([btn('Message Owner to pay',None,'success',url=link)])
+        rows.append([btn('Wallet','wallet'),btn('Home','home')])
+        return text,rows
     if action.startswith('creditbuy:'):
         _,pid,quote=action.split(':',2)
         p=next((p for p in s['settings']['purchase_packs'] if p['id']==pid and p['enabled'] and p['currency']=='coins'),None)
@@ -3192,7 +3195,7 @@ def commands_for(s,uid):
     pairs=(USER_COMMANDS if s['settings'].get('modern_controls') else [])+ADMIN_COMMANDS+(OWNER_COMMANDS if role(uid,s)=='superadmin' else []) if admin else USER_COMMANDS
     if simple_ui(s):pairs=SIMPLE_COMMANDS+(ADMIN_COMMANDS+[(c,d) for c,d in OWNER_COMMANDS if c!='support'] if admin else [])
     if not focused_ui(s) and not admin:pairs=pairs+[('commands','All controls as buttons'),('delivery','Private credential delivery format')]
-    return [{'command':name,'description':'Buy credits with Stars' if name=='buy' and simple_ui(s) else 'Prices and owner inquiry' if name=='buy' and focused_ui(s) else description} for name,description in dict(pairs).items()]
+    return [{'command':name,'description':'Buy credits via DM payment' if name=='buy' and simple_ui(s) else 'Prices and owner inquiry' if name=='buy' and focused_ui(s) else description} for name,description in dict(pairs).items()]
 
 def queue_commands(s,uid,force=False):
     uid=str(uid);u=s['users'].get(uid)
@@ -3208,7 +3211,7 @@ def queue_commands(s,uid,force=False):
     s['outbox'][k].update(command_hash=mark,commands=commands,expires=now()+600,priority=1)
 
 def user_help(s,uid):
-    if simple_ui(s):return '*Help*\n'+md('API Store — choose an API and confirm its coin price.\nMy APIs — use and manage purchased APIs.\nBuy Credits — choose a pack and pay with Stars.\nInvite & Earn — earn referral coins.\n/freeapi — free starter; /trial — short demo.\n/paysupport — payment or refund issues only.\nKeep API keys private.'),[[btn('API Store','create'),btn('Buy Credits','buy')],[btn('Home','home')]]
+    if simple_ui(s):return '*Help*\n'+md('API Store — choose an API and confirm its coin price.\nMy APIs — use and manage purchased APIs.\nBuy Credits — choose a pack, pay the owner in DM (UPI).\nInvite & Earn — earn referral coins.\n/freeapi — free starter; /trial — short demo.\n/paysupport — payment or refund issues only.\nKeep API keys private.'),[[btn('API Store','create'),btn('Buy Credits','buy')],[btn('Home','home')]]
     st=s['settings']
     text='*💙 User help*\n\n'+md('Getting started\n/start — your dashboard\n/trial or /demo — one-time timed API trial\n/verify — check all required channel/group joins\n/id — your Telegram ID\n\nAPIs\n/buyapi or /create — choose API type, preview and confirm its price\n/apis — view, edit, pause, renew or delete your APIs\n/stats — your usage and daily quota\n\nWallet and referrals\n/referral — your invite link and API referral estimates\n/wallet — coins, diamonds and available conversion\n/redeem CODE — claim a gift code once\n/buy — configured Telegram Stars packs\n/terms and /paysupport — purchase terms and support')
     text+='\n\n'+md(f"Trial: {st['trial_minutes']} minutes and {st['trial_requests']} total requests on an admin-approved trial source. One claim per Telegram account. Pausing, deleting and rotating keys do not restart it. No wallet debit.\n")
@@ -3522,7 +3525,6 @@ def decide_approval(s,uid,key,approve):
     return 'Approved. The bound web request may now execute once.' if a['status']=='approved' else 'Approved and applied.' if a['status']=='completed' else 'Rejected. No action executed.'
 
 def web_approval_required(s,uid):
-    if streamlined_ui(s) and role(uid,s)=="superadmin":return False
     if not s['settings'].get('owner_approval_required') or DEMO:return False
     endpoint=request.endpoint or ''
     if endpoint=='export_route' and request.method=='GET':return True
@@ -3592,7 +3594,6 @@ def recover_bot_screen(s,uid):
     return True
 
 def nav_job(s,key,uid,update=None):
-    if streamlined_ui(s):return streamlined_nav(s,key,uid,update)
     j=s['outbox'].get(key);u=s['users'].get(str(uid))
     if not j or not u or j.get('kind') not in ('message','photo') or j.get('receipt') or j.get('reply_keyboard'):return
     j.update(nav=True,priority=-10,nav_epoch=u.get("nav_epoch",0))
@@ -3827,109 +3828,7 @@ def start_embedded_worker():
 
 
 
-
-# v4.20: server-bound quiet verification and exact message navigation.
-def streamlined_ui(s):return bool(s['settings'].get('streamlined_bot_ui'))
-
-def quiet_join_request(s,uid,update):
-    actor(s,uid);revision=join_revision(s)
-    pending=next((j for j in s['outbox'].values() if j.get('kind')=='joincheck' and j['chat']==uid and j.get('revision')==revision and j.get('expires',0)>now()),None)
-    if pending and not pending.get('silent_join'):return
-    requests=json.loads(fernet().decrypt(pending['resume_enc'].encode())) if pending else []
-    # Keep distinct typed commands; coalesce pending taps only, before business execution.
-    if update.get('callback_query'):requests=[u for u in requests if not u.get('callback_query')]
-    require(len(requests)<5,'Membership check is in progress. Wait briefly, then retry.',429)
-    requests.append(update);raw=json.dumps(requests,ensure_ascii=False).encode()
-    require(len(raw)<=65536,'Membership request is too large. Retry with /start.')
-    if not pending:
-        require(sum(j.get('kind')=='joincheck' for j in s['outbox'].values())<100 and len(s['outbox'])<1900,'Verification busy; retry shortly.',503)
-        key=enqueue(s,uid,'',kind='joincheck');pending=s['outbox'][key]
-        pending.update(revision=revision,index=0,expires=now()+600,silent_join=True,priority=-10)
-    pending['resume_enc']=fernet().encrypt(raw).decode()
-    s['users'][uid]['last_join_check']=now()
-
-def quiet_join_finish(s,k,v,result):
-    current=s['outbox'].get(k);u=s['users'].get(v['chat'])
-    if not current:return
-    if not u or u.get('blocked') or result.get('stale') or v['revision']!=join_revision(s):
-        s['outbox'].pop(k,None);return
-    require(result.get('index')==current.get('index'),'Membership result is out of date.',409)
-    if result.get('joined') is True and result['index']+1<len(s['settings']['force_join_channels']):
-        current.update(index=result['index']+1,lease=0,next=now()+1,tries=0);return
-    requests=json.loads(fernet().decrypt(current['resume_enc'].encode()))
-    s['outbox'].pop(k,None)
-    if result.get('joined') is not True:
-        u.pop('join_proof',None);text,rows=join_menu(s)
-        key=enqueue(s,v['chat'],md('Not joined: '+str(result.get('title','required community')))+'\n\n'+text,rows)
-        nav_job(s,key,v['chat'],requests[-1]);return
-    u['join_proof']={'revision':v['revision'],'until':now()+300}
-    activate(s,v['chat']);audit(s,v['chat'],'forcejoin.verified')
-    for update in requests:
-        cb=update.get('callback_query');message=cb.get('message',{}) if cb else update.get('message',{})
-        sender=cb.get('from',{}) if cb else message.get('from',{})
-        require(str(sender.get('id'))==v['chat'] and str(message.get('chat',{}).get('id'))==v['chat'],'Invalid deferred identity.',403)
-        process_bot(s,update,_join_resume=True)
-
-def streamlined_nav(s,key,uid,update):
-    # With no update context, the process wrapper will attach the actual request later.
-    if not update:return
-    j=s['outbox'].get(key);u=s['users'].get(str(uid))
-    if not j or not u or j.get('kind') not in ('message','photo') or j.get('receipt') or j.get('reply_keyboard') or j.get('explicit_preview'):return
-    cb=update.get('callback_query');typed=not cb and str(update.get('message',{}).get('text','')).lstrip().startswith('/')
-    j.update(nav=True,priority=-10,nav_epoch=u.get('nav_epoch',0),navigation_locked=True,fresh_command=typed)
-    j.pop('edit_message_id',None);j.pop('edit_caption',None)
-    target=None
-    if cb:
-        # Normalize ordinary photo menus to text/caption, never credential/security receipts.
-        probe={**j,'kind':'message'};probe.pop('photo',None);probe.pop('video',None)
-        target=callback_edit_target(update,probe,any_action=True)
-    elif not typed and valid_nav(u.get('bot_nav')):
-        anchor=u['bot_nav']
-        if not anchor.get('caption') or text_units(j.get('text',''))<=1024:target={'edit_message_id':anchor['id'],'edit_caption':bool(anchor.get('caption'))}
-    if target:
-        j.pop('photo',None);j.pop('video',None);j['kind']='message';j.update(target)
-    if not typed:
-        for previous,old in list(s['outbox'].items()):
-            if previous!=key and old.get('nav') and old.get('chat')==str(uid) and not old.get('fresh_command') and old.get('lease',0)<=now() and not old.get('receipt') and old.get('edit_message_id')==j.get('edit_message_id'):
-                del s['outbox'][previous]
-
-def recover_api_key(s,uid,a):
-    actor(s,uid)
-    require(a['owner']==str(uid),'Only the endpoint owner can retrieve its saved key.',403)
-    try:
-        record=json.loads(fernet().decrypt(a.get('credential_enc','').encode()))
-        key=record.get('key','')
-        if record.get('id')==a['id'] and record.get('owner')==a['owner'] and isinstance(key,str) and key and hmac.compare_digest(a['key_hash'],digest(key)):return key
-    except Exception:pass
-    return ''  # Legacy hash-only or changed encryption key: never rotate automatically.
-
-def source_config_json(raw):
-    require(isinstance(raw,str) and len(raw.encode())<=65536,'Paste one source configuration JSON object, up to 64 KB.')
-    try:d=strict_json(raw)
-    except (Problem,ValueError,TypeError,RecursionError):raise Problem('Invalid source JSON. Use double quotes, no duplicate fields, NaN or trailing commas.') from None
-    require(isinstance(d,dict),'Source configuration must be one JSON object, not a list.')
-    allowed={'id','name','mode','url','param','example_value','response_format','data','demo_response','validator','plans','billing_currency','price','enabled','trial_enabled','starter_enabled'}
-    require(not set(d)-allowed,'Unsupported source configuration field. Use source fields only; no credentials, roles or platform settings.')
-    require('name' in d and 'mode' in d,'Source configuration requires name and mode.')
-    if 'id' in d:require(isinstance(d['id'],str) and bool(re.fullmatch(r'[A-Za-z0-9_-]{1,80}',d['id'])),'Invalid source ID.')
-    for field in ('enabled','trial_enabled','starter_enabled'):
-        if field in d:require(type(d[field]) is bool,field+' must be true or false.')
-    validate_json_tree(d);return d
-
-def process_bot(s,update,_join_resume=False):
-    if not streamlined_ui(s):return _process_bot(s,update,_join_resume)
-    cb=update.get('callback_query');message=cb.get('message',{}) if cb else update.get('message',{})
-    sender=cb.get('from',{}) if cb else message.get('from',{});uid=str(sender.get('id',''))
-    if _join_resume:require(joined(s,uid) and str(update.get('update_id','')) in s['updates'],'Deferred membership proof expired.',403)
-    before=set(s['outbox']);result=_process_bot(s,update,_join_resume)
-    if message.get('chat',{}).get('type')=='private' and str(message.get('chat',{}).get('id'))==uid:
-        for key in list(s['outbox']):
-            if key not in before and key in s['outbox'] and s['outbox'][key]['chat']==uid:
-                s['outbox'][key]['request_update_id']=str(update.get('update_id',''))
-                nav_job(s,key,uid,update)
-    return result
-
-def _process_bot(s,update,_join_resume=False):
+def process_bot(s,update):
     check_bot_update_binding(s)
     update_id=str(update.get("update_id",""))
     require(update_id.isdigit() and len(update_id)<=19,"Invalid update.")
@@ -3937,18 +3836,17 @@ def _process_bot(s,update,_join_resume=False):
     # Bounded replay window, including an eviction watermark. An evicted old ID must NOT
     # execute a destructive action again. After >7 days without updates, Telegram may restart
     # its sequence with a random ID, so the old watermark is reset on genuine inactivity.
-    if not _join_resume:
-        previous_update=system.get("last_bot_update",max(s["updates"].values(),default=0))
-        if previous_update+7*86400<now():
-            s["updates"]={}; system["update_floor"]=-1
-        if update_id in s["updates"] or int(update_id)<=system.get("update_floor",-1): return False
-        s["updates"][update_id]=now(); system["last_bot_update"]=now()
-        expired=[k for k,v in s["updates"].items() if v<now()-7*86400]
-        excess=sorted(s["updates"],key=int)[:max(0,len(s["updates"])-8192)]
-        evicted=set(expired+excess)
-        if evicted:
-            system["update_floor"]=max(system.get("update_floor",-1),max(map(int,evicted)))
-            for k in evicted: s["updates"].pop(k,None)
+    previous_update=system.get("last_bot_update",max(s["updates"].values(),default=0))
+    if previous_update+7*86400<now():
+        s["updates"]={}; system["update_floor"]=-1
+    if update_id in s["updates"] or int(update_id)<=system.get("update_floor",-1): return False
+    s["updates"][update_id]=now(); system["last_bot_update"]=now()
+    expired=[k for k,v in s["updates"].items() if v<now()-7*86400]
+    excess=sorted(s["updates"],key=int)[:max(0,len(s["updates"])-8192)]
+    evicted=set(expired+excess)
+    if evicted:
+        system["update_floor"]=max(system.get("update_floor",-1),max(map(int,evicted)))
+        for k in evicted: s["updates"].pop(k,None)
     if system.get("security_pruned",0)+60<now():
         prune_security_state(s); system["security_pruned"]=now()
     cb=update.get("callback_query"); m=cb.get("message",{}) if cb else update.get("message",{})
@@ -4017,7 +3915,7 @@ def _process_bot(s,update,_join_resume=False):
         enqueue(s,uid,md("This account is suspended. Contact the administrator.")); return True
     # Flood guard: persist in the same transaction, and do not enqueue one error per spam update.
     if u.get("bot_min")!=now()//60: u["bot_min"]=now()//60; u["bot_count"]=0
-    if not _join_resume:u["bot_count"]+=1
+    u["bot_count"]+=1
     bot_limit=s['settings']['bot_admin_rpm' if is_admin(uid,s) else 'bot_user_rpm'] if focused_ui(s) else 25
     if u["bot_count"]>bot_limit:
         security_notice(s,'bot_flood',uid,'telegram')
@@ -4034,7 +3932,7 @@ def _process_bot(s,update,_join_resume=False):
         if first=='/stat' and not is_admin(uid,s):action='mystats'
         if first=='/support':action='supportinbox' if uid in SUPER_IDS else 'paysupport'
         if action=='buy' and not simple_ui(s):action='ownerbuy'
-    if focused_ui(s) and not streamlined_ui(s) and not cb and first in ('/start','/admin','/menu') and action in ('home','admin'):recover_bot_screen(s,uid)
+    if focused_ui(s) and not cb and first in ('/start','/admin','/menu') and action in ('home','admin'):recover_bot_screen(s,uid)
     if action=='home':u['bot_view']='home'
     if simple_ui(s) and first in ('/support','/contact'):action='support_removed'
     if first=="/start":queue_commands(s,uid)
@@ -4042,7 +3940,6 @@ def _process_bot(s,update,_join_resume=False):
     checkpoint=copy.deepcopy(s)
     try:
         if not is_admin(uid,s) and not joined(s,uid) and action not in (('id','help','verifyjoin','paysupport','contacthelp') if focused_ui(s) else ('id','help','verifyjoin')):
-            if streamlined_ui(s):quiet_join_request(s,uid,update);return True
             text,rows=join_menu(s)
             if first=='/start':
                 welcome_enqueue(s,uid,keyboard=rows);return True
@@ -4235,11 +4132,6 @@ def _process_bot(s,update,_join_resume=False):
             actor(s,uid,admin=True);u['flow']={'step':'welcome_video','t':now()};text=md('Send the original Telegram video (up to 20 MB) within ten minutes. A screenshot cannot supply the video. /cancel exits.')
         elif has_video:text=md(save_welcome_video(s,uid,m))
         elif action=='verifyjoin':
-            if streamlined_ui(s) and not is_admin(uid,s) and s['settings']['force_join_channels']:
-                resume=copy.deepcopy(update)
-                if cb:resume['callback_query']['data']='home'
-                else:resume['message']['text']='/start'
-                quiet_join_request(s,uid,resume);return True
             text=md(request_join(s,uid));rows=[[btn('Home','home')]]
         elif action in ('trial','demo'):
             u['flow']={};text,rows=trial_menu(s,uid)
@@ -4470,17 +4362,6 @@ def _process_bot(s,update,_join_resume=False):
             if r.get('key') and use_safe_receipt(s,uid):
                 enqueue_api_receipt(s,uid,r,'API created');return True
             rows=ready_url_buttons(r)+[[btn("My APIs","apis","success")]]
-        elif action.startswith('readyurl:'):
-            aid=action.split(':',1)[1];a=owned(s,uid,aid)
-            require(a['owner']==uid,'Only the endpoint owner can retrieve its saved key.',403)
-            key=recover_api_key(s,uid,a)
-            if key:
-                result={'id':aid,'key':key,**api_links(s,a,key)}
-                enqueue_api_receipt(s,uid,result,'Your full API URL',force_chat_url=True);return True
-            links=api_links(s,a,'YOUR_SAVED_KEY')
-            text='*Full URL template*\n'+code(links['request_url'] if a.get('header_only') else links['ready_url'])+'\n\n'+md('This older key was saved as a hash only, or its encrypted copy is unavailable. No key has been changed. Replace YOUR_SAVED_KEY with the key from your original receipt.' if not a.get('header_only') else 'Header-only API: send your saved key in X-API-Key. A URL alone cannot authenticate this endpoint.')
-            text+='\n'+md('The configured example/input value is included. If the key is lost, Rotate key requires your confirmation and invalidates the old key.')
-            rows=[[btn('Back to API','api:'+aid),btn('Rotate key','rotatecheck:'+aid)]]
         elif action=="apis":
             mine=[a for a in s["apis"].values() if a["owner"]==uid]
             text="*My APIs*\n"+md(f"{len(mine)} endpoints. Manage any endpoint below; all APIs are available in the admin web panel.")
@@ -4492,7 +4373,6 @@ def _process_bot(s,update,_join_resume=False):
             if a.get('plan_snapshot'):text+='\n'+md('Plan: '+a['plan_snapshot']['name']+' · '+plan_summary(a['plan_snapshot']))
             if a.get('total_limit'):text+='\n'+md(f"Total usage: {a['calls']}/{a['total_limit']}")
             rows=api_keyboard(a)
-            if streamlined_ui(s) and a["owner"]==uid:rows.insert(0,[btn("Full URL with example","readyurl:"+a["id"],"success")])
             if simple_ui(s) and not is_admin(uid,s) and a['mode']!='catalog':rows=[[b for b in row if not str(b.get('callback_data','')).startswith('edit:')] for row in rows];rows=[row for row in rows if row]
             if is_admin(uid,s):
                 if not a.get('is_trial'):rows.insert(0,[btn('Edit limits / auth','apilimits:'+a['id'])])
@@ -4617,7 +4497,7 @@ def tg(method,payload=None,files=None):
             return j.get("result",{})
     except requests.RequestException: raise Problem("Telegram network unavailable.",502) from None
 
-def callback_edit_target(update,job,any_action=False):
+def callback_edit_target(update,job):
     cb=update.get('callback_query')
     if not isinstance(cb,dict) or job.get('kind')!='message' or job.get('photo') or job.get('video') or job.get('receipt'):return None
     message=cb.get('message',{});sender=cb.get('from',{});chat=message.get('chat',{});mid=message.get('message_id')
@@ -4626,17 +4506,12 @@ def callback_edit_target(update,job,any_action=False):
     # Preserve key receipts and invoices when their buttons open a new menu.
     content=str(message.get('text') or message.get('caption') or '')
     if any(marker in content for marker in ('Payment received','Refund processed','Referral qualified','Welcome reward','Secure panel login','Owner approval needed')):return None
-    key_pattern=r'\b(?:srd_[A-Za-z0-9_-]+|Droid[A-Za-z0-9_]+)' if not any_action else r'\b(?:srd_[A-Za-z0-9_-]{32}|Droid[A-Za-z]{10}|Droidx[A-Za-z][A-Za-z0-9_]{0,15}_[A-Za-z0-9_-]{24})(?![A-Za-z0-9_-])'
-    if message.get('invoice') or 'GIFT_' in content or 'PRIVATE API CREDENTIALS' in content or re.search(key_pattern,content):return None
+    if message.get('invoice') or 'GIFT_' in content or 'PRIVATE API CREDENTIALS' in content or re.search(r'\b(?:srd_[A-Za-z0-9_-]+|Droid[A-Za-z0-9_]+)',content):return None
     if job.get('reply_keyboard') or 'Secure panel login' in job.get('text',''):return None
     rows=message.get('reply_markup',{}).get('inline_keyboard',[])
     if any(b.get('copy_text') for row in rows if isinstance(row,list) for b in row if isinstance(b,dict)):return None
-    action=str(cb.get('data',''))
-    plain={'home','create','apis','refs','wallet','buy','help','developer','mystats','admin','adminstats','adminusers','adminlogs','adminrefs','operations','buttonicons','botstyle','trial','demo','customcreate','adminhelp','paysupport','terms','newstatic','newproxy','convert','redeem','sources','addsource','adminapis'}
-    prefixes=('adminapis:','apilimits:','plan:','catalog:','catalogpage:','sourcepreview:','trialpick:','api:','rotatecheck:','deletecheck:','renewcheck:','user:','rename:','edit:','captureicon:')
-    plain.update({'verifyjoin','activate','starter','starterconfirm','delivery','upgradeconfirm','approvals','forcejoin','joinconfirm','joinremoveconfirm','broadcast','contactbuy','contacthelp','supportinbox','ownerbuy','ownerrequest','deliverydefaultconfirm'})
-    prefixes+=('readyurl:','creditpage:','creditbuy:','deliverydefault:','supportview:','supportopen:','supportclose:','supportpage:','supportinbox:','ownerbuy:','ownerpick:','ownerpack:','cmd:','commands:','receiptmode:','starterpick:','upgrades:','upgradepick:','review:','approve:','reject:','joinremove:','broadcastmode:','supportreply:')
-    if not any_action and action not in plain and not action.startswith(prefixes):return None
+    # v4.18: allow-list hata di — PRIVATE chat me har button usi message ko edit kare
+    # (naya message nahi). Receipts/invoices/photo/code wale exclusions upar hain.
     caption=bool(message.get('photo') or message.get('video'))
     if caption and text_units(job.get('text',''))>1024:return None
     return {'edit_message_id':mid,'edit_caption':caption}
@@ -4737,7 +4612,7 @@ def drain(limit=4,budget=12,chat=None,job_id=None):
                     target=v.get('support_target')
                     if not u or u.get('blocked') or (target and v['chat']!=target and v['chat'] not in SUPER_IDS) or (not target and v['chat'] not in SUPER_IDS):
                         del s['outbox'][k];continue
-                if focused_ui(s) and v.get('nav') and u and not v.get('navigation_locked'):
+                if focused_ui(s) and v.get('nav') and u:
                     if v.get('nav_epoch',0)!=u.get('nav_epoch',0):del s['outbox'][k];continue
                     if u.get('nav_recovery_pending'):
                         v.pop('edit_message_id',None);v.pop('edit_caption',None);v.pop('photo',None);v.pop('video',None);v['kind']='message'
@@ -5023,8 +4898,8 @@ def webhook():
         store.tx(lambda s:(check_bot_update_binding(s),apply_payment(s,message,refund=bool(message.get('refunded_payment'))))[1])
         return jsonify(ok=True)  # charge-ID dedupe, independent of normal update watermark/flood guard
     cb=update.get("callback_query")
-    if cb and not background_worker_requested():
-        # Clear the button spinner before the RTDB round trip; no business success is asserted.
+    if cb:
+        # Spinner turant clear — RTDB round trip se PEHLE (fast button feel)
         try: tg("answerCallbackQuery",{"callback_query_id":cb["id"]})
         except Exception: pass
     incoming=cb.get('message',{}) if isinstance(cb,dict) else message
@@ -5050,7 +4925,8 @@ def webhook():
                 if v415_enabled(state) and not focused_ui(state) and job.get('kind') in ('message','photo') and not str(cb.get('data','') if cb else '').startswith(('approve:','reject:','broadcastconfirm')) and not job.get('receipt') and not job.get('reply_keyboard') and not any(x in job.get('text','') for x in ('Secure panel login','one-time code','confirmation code','New API key')):
                     job['nav']=True
                     anchor=state['users'].get(reply_chat,{}).get('bot_nav',{})
-                    if not cb and job.get('kind')=='message' and anchor.get('t',0)+86400>now() and anchor.get('id') and (not anchor.get('caption') or text_units(job['text'])<=1024):
+                    typed_cmd=not cb and str((update.get('message') or {}).get('text') or '').startswith('/')
+                    if not cb and not typed_cmd and job.get('kind')=='message' and anchor.get('t',0)+86400>now() and anchor.get('id') and (not anchor.get('caption') or text_units(job['text'])<=1024):
                         target={'edit_message_id':anchor['id'],'edit_caption':anchor.get('caption',False)}
                 if focused_ui(state):
                     nav_job(state,key,reply_chat,update);target=None
@@ -5073,7 +4949,7 @@ def webhook():
     _BOT_TIMINGS={'at':now(),'database_ms':round((database_done-started)*1000),'delivery_ms':round((finished-database_done)*1000)}
     if finished-started>3:
         LOG.warning('Slow bot webhook: database_ms=%d delivery_ms=%d',int((database_done-started)*1000),int((finished-database_done)*1000))
-    response=jsonify(method='answerCallbackQuery',callback_query_id=cb['id']) if cb and background_worker_requested() else jsonify(ok=True)
+    response=jsonify(ok=True)
     response.headers['X-Bot-Database-Ms']=str(_BOT_TIMINGS['database_ms']);response.headers['X-Bot-Delivery-Ms']=str(_BOT_TIMINGS['delivery_ms'])
     return response
 
@@ -5367,7 +5243,7 @@ function sourceHostHint(){const box=$('#sourcehosthint');if(!box)return;const mo
 function overview(){if(isAdmin())return adminOverview();const active=S.apis.filter(a=>a.status==='active').length,calls=S.apis.reduce((n,a)=>n+a.calls,0),coins=S.me.coins,cost=S.settings.default_api_price;return head('Your workspace','A little control. Endless possibilities.','Manage your endpoints, track usage and build what comes next.',button('create',icon('plus')+' Create API',true))+(!S.me.active?`<div class="notice">Activate your account to start creating APIs. ${button('activate','Activate account',true)}</div>`:'')+`<div class="cards">${metric('TOTAL ENDPOINTS',fmt(S.apis.length),`<span class="green">${active} active</span> · ${S.apis.length-active} inactive`,'api')}${metric('TOTAL REQUESTS',fmt(calls),'Lifetime accepted attempts','chart')}${metric(isAdmin()?'REGISTERED USERS':'QUALIFIED REFERRALS',fmt(isAdmin()?S.users.length:S.me.refs),isAdmin()?'Telegram-linked accounts':'One reward per new account','users')}${metric('COIN BALANCE',fmt(coins),`${cost} coins unlock an API`,'gift')}</div><div class="two"><div class="card"><div class="cardhead"><div><h2>Request activity</h2><span class="chartnote">Recent sample · up to 30 calls per endpoint</span></div><span class="tag gray">Last hour</span></div>${chart()}</div><div class="card refcard"><span class="eyebrow">Build together</span><h2>Your network. Your next API.</h2><p>Earn ${cost} coins (${Math.ceil(cost/S.settings.referral_reward)} approved referrals at the current rate), or purchase a pack. Unlock an endpoint with ${S.settings.daily_limit} daily requests for ${S.settings.valid_days} days.</p><div class="creditdots">${Array.from({length:Math.min(cost,20)},(_,i)=>`<i class="${i<Math.min(cost,coins)?'filled':''}"></i>`).join('')}</div><div class="refdetails"><span>${coins} available coins</span><span>${Math.max(0,cost-coins)} to next API</span></div>${button('copyref',icon('copy')+' Copy invite link')}</div></div><div class="section"><div class="sectionheader"><h2>${isAdmin()?'Workspace':'Your'} endpoints <span class="count">${S.apis.length}</span></h2><button class="ghost small" data-view="apis">View all ${icon('arrow')}</button></div>${apiTable(S.apis.slice(0,4))}</div><div class="bottomgrid"><div class="card"><div class="cardhead"><h2>${isAdmin()?'Latest activity':'Your plan'}</h2><span class="tag gray">${isAdmin()?'Audit trail':'Referral access'}</span></div>${isAdmin()?activities(S.logs):`<div class="statusrow"><span>Daily requests</span><b>${S.settings.daily_limit}</b></div><div class="statusrow"><span>API validity</span><b>${S.settings.valid_days} days</b></div><p class="caption">Paid plan limits reset at 00:00 UTC; trials never reset or renew.</p>`}</div><div class="card"><div class="cardhead"><h2>Your first request</h2><span class="tag blue">GET</span></div><pre class="callcode">curl '${esc(location.origin)}/api/API_ID' \\\n  -H 'X-API-Key: YOUR_API_KEY'</pre><p class="caption">Real JSON responses. No browser tab required.<br>Keep API keys out of URLs, screenshots and public repositories.</p></div></div>`}
 function apis(){return head('API workspace','Your endpoints','Create, edit, renew and monitor APIs. Keys are displayed only once.',button('create',icon('plus')+' Create API',true))+`<div class="section"><div class="sectionheader"><h2>${isAdmin()?'All workspace APIs':'My APIs'} <span class="count">${S.apis.length}</span></h2><span class="caption">Paid: daily reset · Trials: no reset</span></div><div class="toolbar"><input id="apisearch" placeholder="Search name or ID…" aria-label="Search APIs"></div><div id="apitable">${apiTable(S.apis)}</div></div>`}
 
-function catalog(){return head('Source library','API catalogue','Admin-managed sources. Your own key, expiry and daily quota.',isAdmin()?button('newcatalog',icon('plus')+' Add source',true)+' '+button('newcatalogjson','Add via JSON')+' '+button('newdemosource','Add demo JSON source'):'')+`<div class="cataloggrid">${S.catalog.map(c=>`<div class="card"><div class="cardhead"><span class="apiicon">${icon('book')}</span><span class="tag ${c.enabled===false?'red':'blue'}">${c.enabled===false?'Disabled':esc(c.mode)}</span></div><h2>${esc(c.name)}</h2><p>${c.plans?.length?c.plans.map(p=>`${esc(p.name)}: ${p.price} coins · ${p.days}d · ${p.daily}/day · ${p.rpm}/min${p.total?' · '+p.total+' total':''}${p.enabled===false?' (disabled)':''}`).join('<br>'):`${S.settings.daily_limit} requests/day · ${S.settings.valid_days} days<br>${esc(priceText(c))} per personal endpoint<br>${esc(c.referral_hint||'')}`}<br><code>${esc(c.id)}</code>${['proxy','validation'].includes(c.mode)?'<br>Example: <code>'+esc(c.param)+'='+esc(c.example_value||'Not set')+'</code>':''}</p><div class="actions">${button('previewsource','Sample response',false,c.id)}${button('fromcatalog',isAdmin()?'Create test endpoint':'Create my API',true,c.id)}${c.trial_enabled?'<span class="tag blue">Trial enabled · claim in bot</span>':''}${isAdmin()?button('editcatalog','Edit',false,c.id):''}</div></div>`).join('')||'<div class="empty">No approved sources yet. An admin can add one here.</div>'}</div>`}
+function catalog(){return head('Source library','API catalogue','Admin-managed sources. Your own key, expiry and daily quota.',isAdmin()?button('newcatalog',icon('plus')+' Add source',true)+' '+button('newdemosource','Add demo JSON source'):'')+`<div class="cataloggrid">${S.catalog.map(c=>`<div class="card"><div class="cardhead"><span class="apiicon">${icon('book')}</span><span class="tag ${c.enabled===false?'red':'blue'}">${c.enabled===false?'Disabled':esc(c.mode)}</span></div><h2>${esc(c.name)}</h2><p>${c.plans?.length?c.plans.map(p=>`${esc(p.name)}: ${p.price} coins · ${p.days}d · ${p.daily}/day · ${p.rpm}/min${p.total?' · '+p.total+' total':''}${p.enabled===false?' (disabled)':''}`).join('<br>'):`${S.settings.daily_limit} requests/day · ${S.settings.valid_days} days<br>${esc(priceText(c))} per personal endpoint<br>${esc(c.referral_hint||'')}`}<br><code>${esc(c.id)}</code>${['proxy','validation'].includes(c.mode)?'<br>Example: <code>'+esc(c.param)+'='+esc(c.example_value||'Not set')+'</code>':''}</p><div class="actions">${button('previewsource','Sample response',false,c.id)}${button('fromcatalog',isAdmin()?'Create test endpoint':'Create my API',true,c.id)}${c.trial_enabled?'<span class="tag blue">Trial enabled · claim in bot</span>':''}${isAdmin()?button('editcatalog','Edit',false,c.id):''}</div></div>`).join('')||'<div class="empty">No approved sources yet. An admin can add one here.</div>'}</div>`}
 function referrals(){if(S.me.auth_provider==='firebase')return head('Administrator workspace','Share your bot.','Referral coins belong to Telegram users. Firebase admins manage the catalogue and do not need coins.')+`<div class="card"><p class="caption">Create a catalogue source, set its public example input, then share this bot link with users.</p><pre class="callcode">${esc(S.referral_url)}</pre>${button('copyref','Copy bot link',true)}</div>`;return `<div class="notice">Both earn coins: you receive ${S.settings.referral_reward}; your genuinely new referred friend receives ${S.settings.referral_new_user_reward}. All configured joins + activation are required${S.settings.referral_approval?', then admin approval':''}. Default API: ${Math.ceil(S.settings.default_api_price/S.settings.referral_reward)} referrals from zero, or ${Math.ceil(Math.max(0,S.settings.default_api_price-S.me.coins)/S.settings.referral_reward)} more with your current balance.</div>`+head('Community rewards','Good APIs deserve good company.','Invite new users. Earn coins after activation and any required admin approval.')+`<div class="two"><div class="card refcard"><div class="eyebrow">Your balance</div><div class="bigcoins">${fmt(S.me.coins)} <span style="font-size:16px;letter-spacing:0;color:#9aaac3">coins</span></div><p>1 approved referral = ${S.settings.referral_reward} coins. Default API: ${S.settings.default_api_price} coins · ${S.settings.daily_limit} requests/day · ${S.settings.valid_days} days</p><div class="field"><label>Your invite link</label><input value="${esc(S.referral_url)}" readonly></div>${button('copyref',icon('copy')+' Copy referral link',true)}</div><div class="card"><h2>How it works</h2><div class="statusrow"><span>01 &nbsp; Share your personal link</span></div><div class="statusrow"><span>02 &nbsp; New user activates their account</span></div><div class="statusrow"><span>03 &nbsp; Collect ${S.settings.default_api_price} coins and create an API</span></div><p class="caption">${S.settings.referral_approval?'Admin approval is required before credit is awarded.':'Coins are awarded automatically on first activation.'} Duplicate IDs and self-referrals do not count. Multiple accounts controlled by one person cannot reliably be detected; admins can switch on manual review.</p></div></div><div class="section"><div class="sectionheader"><h2>${isAdmin()?'Referral review':'Your referrals'}</h2></div><div class="tablewrap"><table><thead><tr><th>Invited user</th><th>Referrer</th><th>Date</th><th>Status</th><th></th></tr></thead><tbody>${S.referrals.map(r=>`<tr><td class="mono">${esc(r.to)}</td><td class="mono">${esc(r.from)}</td><td>${date(r.t)}</td><td><span class="tag ${r.status==='pending'?'blue':r.status==='rejected'?'red':''}">${esc(r.status)}</span></td><td>${isAdmin()&&r.status==='pending'?`<button class="small good" data-action="approveref" data-id="${esc(r.id)}">Approve</button> <button class="small danger" data-action="rejectref" data-id="${esc(r.id)}">Reject</button>`:''}</td></tr>`).join('')||'<tr><td colspan="5" class="empty">No referrals yet.</td></tr>'}</tbody></table></div></div>`}
 function users(){return head('People & access','The people behind your platform.','Telegram/Firebase accounts, roles and wallet balances. Super-admins come from server config.')+`<div class="section"><div class="sectionheader"><h2>Members <span class="count">${S.users.length}</span></h2></div><div class="toolbar"><input id="usersearch" placeholder="Search user or Telegram ID…" aria-label="Search users"></div><div class="tablewrap"><table><thead><tr><th>Member</th><th>Role</th><th>Coins</th><th>Status</th><th>Joined</th><th></th></tr></thead><tbody id="usertable">${userRows(S.users)}</tbody></table></div></div>`}
 function userRows(list){return list.map(u=>`<tr><td><strong>${esc(u.name)}</strong><span class="sub mono">${esc(u.id)}</span></td><td><span class="tag ${u.role==='superadmin'?'blue':'gray'}">${esc(u.role)}</span></td><td>${u.coins}</td><td><span class="tag ${u.blocked?'red':!u.active?'gray':''}">${u.blocked?'Blocked':u.active?'Active':'Not activated'}</span></td><td>${date(u.joined)}</td><td>${u.role==='superadmin'||u.auth_provider==='firebase'?'<span class="caption">Config-managed</span>':button('edituser','Manage',false,u.id)}</td></tr>`).join('')}
@@ -5406,18 +5282,17 @@ function go(v){view=v;nav();render();$('#sidebar').classList.remove('open');wind
 function modal(title,html,submit=null){lastFocus=document.activeElement;$('#modaltitle').textContent=title;$('#modalbody').innerHTML=html;$('#modalback').classList.remove('hidden');modalSubmit=submit;$('#modalbody input, #modalbody textarea, #modalbody button, #modalbody select')?.focus()}
 function closeModal(){$('#modalback').classList.add('hidden');$('#modalbody').innerHTML='';modalSubmit=null;lastFocus?.focus()}
 const formEnd=(text='Save changes')=>`<div class="modalerror" id="modalerror"></div><div class="buttonrow"><button type="button" class="ghost" data-action="closemodal">Cancel</button><button class="primary" type="submit">${text}</button></div></form>`;
-function sourceFields(a={}){return `${field('name','API name',a.name||'')}${a.mode==='catalog'?'':`<div class="grid2"><div class="field"><label for="f_mode">Response mode</label><select name="mode" id="f_mode"><option value="static" ${a.mode==='static'?'selected':''}>Static JSON</option><option value="proxy" ${a.mode==='proxy'?'selected':''}>HTTPS proxy</option><option value="validation" ${a.mode==='validation'?'selected':''}>Offline validation only</option></select></div>${field('param','Input parameter',a.param||'value','text','Independent per source. Use authorized, non-sensitive inputs.')}</div><div id="staticfields">${area('data','JSON response',a.data??{message:'Hello, world'})}</div><div id="proxyfields">${field('url','Approved source URL',a.url||'','url','Exact host must be on the allowlist. Keep provider keys private. No redirects.')}<div id="sourcehosthint" class="notice"></div><div class="field"><label for="f_response_format">Proxy response JSON</label><select name="response_format" id="f_response_format"><option value="wrapped" ${a.response_format!=='original'?'selected':''}>Wrapped: data + quota information</option><option value="original" ${a.response_format==='original'?'selected':''}>Original JSON: no extra wrapper</option></select><small>Original mode preserves JSON structure and public provider links, skips replacement/injection rules, and still redacts credentials. Auth, limits and gateway error checks remain active. Shared-source changes affect bound endpoints.</small></div></div><div id="validationfields"><div class="field"><label for="f_validator">Validator</label><select id="f_validator" name="validator"><option value="phone_format" ${a.validator!=='aadhaar_checksum'?'selected':''}>Indian mobile format — no subscriber lookup</option><option value="aadhaar_checksum" ${a.validator==='aadhaar_checksum'?'selected':''}>Aadhaar format/checksum — no identity lookup</option></select></div><p class="caption">No external provider call, no private records, no identity verification. Empty example defaults to an all-zero synthetic invalid input.</p></div><div id="inputfields">${field('example_value','Public synthetic example',a.example_value||'','text','Required for proxies. Never put secrets or a real private record here.')}</div><div id="demofields"><div class="field"><label for="f_demo_response">Demo response JSON — optional synthetic sample</label><textarea id="f_demo_response" name="demo_response" rows="4" maxlength="1200">${esc(Object.prototype.hasOwnProperty.call(a,'demo_response')?JSON.stringify(a.demo_response,null,2):'')}</textarea><small>Up to 1200 bytes after JSON encoding. A preview never calls the provider or spends customer coins.</small></div></div>`}`}
+function sourceFields(a={}){return `${field('name','API name',a.name||'')}${a.mode==='catalog'?'':`<div class="grid2"><div class="field"><label for="f_mode">Response mode</label><select name="mode" id="f_mode"><option value="static" ${a.mode==='static'?'selected':''}>Static JSON</option><option value="proxy" ${a.mode==='proxy'?'selected':''}>HTTPS proxy</option><option value="validation" ${a.mode==='validation'?'selected':''}>Offline validation only</option></select></div>${field('param','Input parameter',a.param||'value','text','Independent per source. Use authorized, non-sensitive inputs.')}</div><div id="staticfields">${area('data','JSON response',a.data??{message:'Hello, world'})}</div><div id="proxyfields">${field('url','Approved source URL',a.url||'','url','Exact host must be on the allowlist. Keep provider keys private. No redirects.')}<div id="sourcehosthint" class="notice"></div></div><div id="validationfields"><div class="field"><label for="f_validator">Validator</label><select id="f_validator" name="validator"><option value="phone_format" ${a.validator!=='aadhaar_checksum'?'selected':''}>Indian mobile format — no subscriber lookup</option><option value="aadhaar_checksum" ${a.validator==='aadhaar_checksum'?'selected':''}>Aadhaar format/checksum — no identity lookup</option></select></div><p class="caption">No external provider call, no private records, no identity verification. Empty example defaults to an all-zero synthetic invalid input.</p></div><div id="inputfields">${field('example_value','Public synthetic example',a.example_value||'','text','Required for proxies. Never put secrets or a real private record here.')}</div><div id="demofields"><div class="field"><label for="f_demo_response">Demo response JSON — optional synthetic sample</label><textarea id="f_demo_response" name="demo_response" rows="4" maxlength="1200">${esc(Object.prototype.hasOwnProperty.call(a,'demo_response')?JSON.stringify(a.demo_response,null,2):'')}</textarea><small>Up to 1200 bytes after JSON encoding. A preview never calls the provider or spends customer coins.</small></div></div>`}`}
 function syncMode(){const mode=$('#f_mode')?.value;for(const [id,show] of [['staticfields',mode==='static'],['proxyfields',mode==='proxy'],['validationfields',mode==='validation'],['inputfields',mode!=='static'],['demofields',mode!=='validation']])if($('#'+id))$('#'+id).classList.toggle('hidden',!show);sourceHostHint()}
-function sourceData(f){const d=Object.fromEntries(new FormData(f));if(d.mode!=='proxy')d.response_format='wrapped';if(d.mode==='proxy'&&d.url)d.url=d.url.replace(/&(?:amp;)+/g,'&');if(d.mode==='static')d.data=JSON.parse(d.data);else delete d.data;if(d.mode!=='validation'&&d.demo_response?.trim())d.demo_response=JSON.parse(d.demo_response);else delete d.demo_response;return d}
+function sourceData(f){const d=Object.fromEntries(new FormData(f));if(d.mode==='proxy'&&d.url)d.url=d.url.replace(/&(?:amp;)+/g,'&');if(d.mode==='static')d.data=JSON.parse(d.data);else delete d.data;if(d.mode!=='validation'&&d.demo_response?.trim())d.demo_response=JSON.parse(d.demo_response);else delete d.demo_response;return d}
 function showKey(r){modal('Save your private API credentials',`${r.is_trial?`<div class="notice">TRIAL · expires ${date(r.expires)} · ${r.trial_limit} total requests; no reset.</div>`:''}<div class="notice warn">Save the TXT now. Only the key hash is stored in the endpoint; the original key cannot be retrieved later. Do not paste keyed URLs into chats. Header-only protection is ${r.header_only?'ON':'OFF (available in endpoint settings)'}.</div>${field('newkey','API key',r.key)}${field('endpoint','Endpoint without credentials',r.endpoint||location.origin+'/api/'+r.id)}<div class="field"><label>Private TXT content</label><textarea id="receipt_text" data-filename="${esc(r.id)}.txt" rows="9" readonly>${esc(r.credential_text||'API key: '+r.key)}</textarea></div><details><summary>${r.header_only?'Request URL (requires header authentication)':'Legacy keyed URL — optional, keep private'}</summary>${field('readyurl','URL',r.ready_url||'')}</details><div class="buttonrow">${button('downloadcredentials','Download private TXT',true)}${button('copynewkey','Copy key')}${button('closemodal','Done')}</div>`);$('#f_newkey').readOnly=true;$('#f_endpoint').readOnly=true;$('#f_readyurl').readOnly=true}
 
 function createModal(cid){if(cid){const c=S.catalog.find(x=>x.id===cid),plans=(c.plans||[]).filter(p=>p.enabled!==false);modal('Create from catalogue',`<form id="modalform"><div class="notice">${esc(c.name)} · ${isAdmin()?'Admin test: no coins charged.':'Confirm your selected plan.'}${!c.plans?.length?`<br>${S.settings.daily_limit}/day · ${S.settings.valid_days} days · ${esc(priceText(c))}`:''}</div>${c.plans?.length?`<label class="field">Plan<select name="chosen_plan" required>${plans.map(p=>`<option value="${esc(p.id)}">${esc(p.name)} · ${p.price} coins · ${p.days} days · ${p.daily}/day · ${p.rpm}/min${p.total?' · '+p.total+' total':''}</option>`).join('')}</select></label>`:''}${field('name','Your API name',c.name)}${formEnd('Create API')}`,async f=>{const plan=plans.find(p=>p.id===f.elements.chosen_plan?.value);if(c.plans?.length&&!plan)throw new Error('No enabled plan. Edit the source first.');const r=await req('/manage/apis',{catalog_id:cid,name:f.elements.name.value,quote_price:plan?plan.price:c.price??S.settings.default_api_price,quote_currency:plan?'coins':c.billing_currency||'coins',...(plan?{plan_id:plan.id,quote_plan:plan}:{})});closeModal();await refresh();showKey(r)});return}modal('Create admin test endpoint',`<form id="modalform"><div class="notice">This creates your own test endpoint, not a category for customers. To sell a source, use API catalogue → Add source.<br>${S.settings.daily_limit} daily requests · ${S.settings.valid_days} days · ${isAdmin()?0:S.settings.default_api_price} coins</div>${sourceFields()}${formEnd('Create API')}`,async f=>{const r=await req('/manage/apis',{...sourceData(f),quote_price:S.settings.default_api_price,quote_currency:'coins'});closeModal();await refresh();showKey(r)});syncMode()}
-function editApi(id){const a=S.apis.find(a=>a.id===id),src=a.mode==='catalog'?S.catalog.find(c=>c.id===a.catalog_id):null,locked=isAdmin()&&!ISDEMO&&(!S.settings.owner_approval_required||S.me.role==='superadmin')&&S.security.elevated_until<=Date.now()/1000;modal('Edit endpoint settings',`<div class="actions" style="margin-bottom:18px">${status(a)}<span class="chip">${esc(a.id)}</span></div>${locked?`<div class="notice warn">Editing another user's endpoint or enabling public access requires fresh security confirmation. ${button('opensecurity','Unlock sensitive edits')}</div>`:''}${src?`<div class="notice"><b>Shared source: ${esc(src.name)}</b><br>Customer parameter: <code>${esc(src.param||'(none)')}</code>. Provider URL/input/example live in the source, not this endpoint.<br>Save endpoint changes before opening the source editor. Shared source edits affect ${S.apis.filter(x=>x.catalog_id===src.id).length} bound endpoints.<div class="actions">${button('editcatalog','Edit shared source',false,src.id)}</div></div>`:''}${a.plan_snapshot?`<div class="notice">Purchased plan: ${esc(a.plan_snapshot.name)}. Catalogue plan edits affect new purchases only. Explicit overrides below change this endpoint; renewal reapplies its saved daily/RPM policy.</div>`:''}${a.is_trial?`<div class="notice">TRIAL: ${a.calls}/${a.trial_limit} total requests · fixed deadline ${date(a.trial_deadline)}. Only the name is editable.</div>`:''}<form id="modalform">${sourceFields(a)}${isAdmin()&&!a.is_trial?`<div class="grid2">${field('daily','Daily limit',a.daily,'number')}${field('rpm','Per-minute limit',a.rpm,'number')}${field('total_limit','Lifetime total cap · 0 = none',a.total_limit||0,'number')}${field('extend_days','Extend validity · days',0,'number')}</div><label class="checklabel"><input name="set_exact_expiry" type="checkbox"> Override exact expiry instead of adding days</label>${field('expires_at','Exact expiry · UTC',new Date(a.expires*1000).toISOString().slice(0,16),'datetime-local')}<label class="checklabel"><input name="header_only" type="checkbox" ${a.header_only?'checked':''}> Require X-API-Key / Bearer headers; reject keyed URLs and link previews</label><label class="checklabel"><input name="public" type="checkbox" ${a.public?'checked':''}> Public endpoint · no key required (cannot combine with header-only)</label><p class="caption">Enabling header-only breaks existing query-key integrations until they send a header. This does not rotate the key. Usage is never reset by saving.</p>`:''}${formEnd('Save endpoint settings')}<div class="divider"></div><div class="actions">${button('apitoggle',a.active?'Pause API':'Enable API',false,id)}${a.is_trial?'':button('apirenew','Renew',false,id)}${button('apirotate','Rotate key / new TXT',false,id)}<button class="danger" data-action="apidelete" data-id="${esc(id)}">Delete</button></div><div class="divider"></div><h3>Usage & history</h3><p class="caption">${a.used}/${a.daily} today · ${a.calls} total${a.total_limit?' / '+a.total_limit+' cap':''} · ${a.errors} upstream failures<br>Expires ${date(a.expires)} ${time(a.expires)} · Owner ${esc(a.owner)}</p><div class="actions">${button('testapi','Test endpoint',false,id)}${button('copyendpoint','Copy endpoint without key',false,id)}</div><div class="tablewrap" style="margin-top:14px"><table><thead><tr><th>Time</th><th>Result</th><th>Latency</th></tr></thead><tbody>${(a.history||[]).slice(-8).reverse().map(h=>`<tr><td>${time(h.t)}</td><td>${h.ok?'OK':'Error'}</td><td>${h.ms}ms</td></tr>`).join('')||'<tr><td colspan="3">No recent calls</td></tr>'}</tbody></table></div>`,async f=>{const d=a.mode==='catalog'?{name:f.elements.name.value}:sourceData(f);if(isAdmin()&&!a.is_trial){d.daily=+f.elements.daily.value;d.rpm=+f.elements.rpm.value;d.total_limit=+f.elements.total_limit.value;d.extend_days=+f.elements.extend_days.value;d.public=f.elements.public.checked;d.header_only=f.elements.header_only.checked;if(f.elements.set_exact_expiry.checked){if(d.extend_days)throw new Error('Use exact expiry OR extra days, not both.');d.expires_at=Math.floor(Date.parse(f.elements.expires_at.value+'Z')/1000);if(!Number.isFinite(d.expires_at))throw new Error('Choose a valid expiry.');}}await req('/manage/apis/'+id+'/edit',d);closeModal();await refresh();toast('Endpoint settings saved. Usage preserved.')});syncMode()}
+function editApi(id){const a=S.apis.find(a=>a.id===id),src=a.mode==='catalog'?S.catalog.find(c=>c.id===a.catalog_id):null,locked=isAdmin()&&!ISDEMO&&!S.settings.owner_approval_required&&S.security.elevated_until<=Date.now()/1000;modal('Edit endpoint settings',`<div class="actions" style="margin-bottom:18px">${status(a)}<span class="chip">${esc(a.id)}</span></div>${locked?`<div class="notice warn">Editing another user's endpoint or enabling public access requires fresh security confirmation. ${button('opensecurity','Unlock sensitive edits')}</div>`:''}${src?`<div class="notice"><b>Shared source: ${esc(src.name)}</b><br>Customer parameter: <code>${esc(src.param||'(none)')}</code>. Provider URL/input/example live in the source, not this endpoint.<br>Save endpoint changes before opening the source editor. Shared source edits affect ${S.apis.filter(x=>x.catalog_id===src.id).length} bound endpoints.<div class="actions">${button('editcatalog','Edit shared source',false,src.id)}</div></div>`:''}${a.plan_snapshot?`<div class="notice">Purchased plan: ${esc(a.plan_snapshot.name)}. Catalogue plan edits affect new purchases only. Explicit overrides below change this endpoint; renewal reapplies its saved daily/RPM policy.</div>`:''}${a.is_trial?`<div class="notice">TRIAL: ${a.calls}/${a.trial_limit} total requests · fixed deadline ${date(a.trial_deadline)}. Only the name is editable.</div>`:''}<form id="modalform">${sourceFields(a)}${isAdmin()&&!a.is_trial?`<div class="grid2">${field('daily','Daily limit',a.daily,'number')}${field('rpm','Per-minute limit',a.rpm,'number')}${field('total_limit','Lifetime total cap · 0 = none',a.total_limit||0,'number')}${field('extend_days','Extend validity · days',0,'number')}</div><label class="checklabel"><input name="set_exact_expiry" type="checkbox"> Override exact expiry instead of adding days</label>${field('expires_at','Exact expiry · UTC',new Date(a.expires*1000).toISOString().slice(0,16),'datetime-local')}<label class="checklabel"><input name="header_only" type="checkbox" ${a.header_only?'checked':''}> Require X-API-Key / Bearer headers; reject keyed URLs and link previews</label><label class="checklabel"><input name="public" type="checkbox" ${a.public?'checked':''}> Public endpoint · no key required (cannot combine with header-only)</label><p class="caption">Enabling header-only breaks existing query-key integrations until they send a header. This does not rotate the key. Usage is never reset by saving.</p>`:''}${formEnd('Save endpoint settings')}<div class="divider"></div><div class="actions">${button('apitoggle',a.active?'Pause API':'Enable API',false,id)}${a.is_trial?'':button('apirenew','Renew',false,id)}${button('apirotate','Rotate key / new TXT',false,id)}<button class="danger" data-action="apidelete" data-id="${esc(id)}">Delete</button></div><div class="divider"></div><h3>Usage & history</h3><p class="caption">${a.used}/${a.daily} today · ${a.calls} total${a.total_limit?' / '+a.total_limit+' cap':''} · ${a.errors} upstream failures<br>Expires ${date(a.expires)} ${time(a.expires)} · Owner ${esc(a.owner)}</p><div class="actions">${button('testapi','Test endpoint',false,id)}${button('copyendpoint','Copy endpoint without key',false,id)}</div><div class="tablewrap" style="margin-top:14px"><table><thead><tr><th>Time</th><th>Result</th><th>Latency</th></tr></thead><tbody>${(a.history||[]).slice(-8).reverse().map(h=>`<tr><td>${time(h.t)}</td><td>${h.ok?'OK':'Error'}</td><td>${h.ms}ms</td></tr>`).join('')||'<tr><td colspan="3">No recent calls</td></tr>'}</tbody></table></div>`,async f=>{const d=a.mode==='catalog'?{name:f.elements.name.value}:sourceData(f);if(isAdmin()&&!a.is_trial){d.daily=+f.elements.daily.value;d.rpm=+f.elements.rpm.value;d.total_limit=+f.elements.total_limit.value;d.extend_days=+f.elements.extend_days.value;d.public=f.elements.public.checked;d.header_only=f.elements.header_only.checked;if(f.elements.set_exact_expiry.checked){if(d.extend_days)throw new Error('Use exact expiry OR extra days, not both.');d.expires_at=Math.floor(Date.parse(f.elements.expires_at.value+'Z')/1000);if(!Number.isFinite(d.expires_at))throw new Error('Choose a valid expiry.');}}await req('/manage/apis/'+id+'/edit',d);closeModal();await refresh();toast('Endpoint settings saved. Usage preserved.')});syncMode()}
 
 function planRow(p={}){const pid=p.id||('p_'+Math.random().toString(36).slice(2,10));return `<div data-plan-row class="card" style="margin:12px 0;padding:14px"><div class="grid2">${[['id','Stable plan ID',pid,'text'],['name','Plan name',p.name||'Starter','text'],['price','Coins',p.price??250,'number'],['days','Days',p.days??10,'number'],['daily','Requests / day',p.daily??100,'number'],['rpm','Requests / minute',p.rpm??30,'number'],['total','Total cap · 0 = none',p.total??0,'number']].map(([k,label,v,t])=>`<label class="field">${label}<input name="plan_${k}" type="${t}" value="${esc(v)}" ${k==='id'?'readonly':''} required></label>`).join('')}</div><label class="checklabel"><input name="plan_enabled" type="checkbox" ${p.enabled!==false?'checked':''}> Available for new purchases</label><button type="button" class="ghost small" data-action="removeplanrow" data-id="${esc(pid)}">Remove plan</button></div>`}
 function readPlans(f){return [...f.querySelectorAll('[data-plan-row]')].map(row=>{const val=k=>row.querySelector('[name="plan_'+k+'"]').value;return {id:val('id'),name:val('name'),price:+val('price'),days:+val('days'),daily:+val('daily'),rpm:+val('rpm'),total:+val('total'),enabled:row.querySelector('[name=plan_enabled]').checked,billing_currency:'coins'}})}
 function rewardTools(){modal('Owner rewards & credits',`<div class="notice">Owner-only financial actions. Existing credits are not reversed by revoking a code. Code text is shown only when created.</div><div class="actions">${button('newredeem','Create redeem code',true)}${button('credituser','Add user coins')}</div><h3>Redeem records</h3>${(S.redeem_codes||[]).map(r=>`<div class="card"><code>${esc(r.id)}</code><p>${r.coins} coins · ${r.claimed}/${r.uses} users · expires ${date(r.expires)} · ${r.enabled?'Enabled':'Revoked'}</p>${r.enabled?button('revokecode','Revoke',false,r.id):''}</div>`).join('')||'<p>No codes created yet.</p>'}`)}
-function catalogJsonModal(id){const current=S.catalog.find(c=>c.id===id),sample=current||{name:'Sample JSON API',mode:'static',data:{message:'Hello'},price:S.settings.default_api_price,billing_currency:'coins',enabled:true,trial_enabled:false,starter_enabled:false,plans:[]};modal(id?'Edit source configuration JSON':'Add source via JSON',`<form id="modalform"><div class="notice">Alternative to the existing UI form. Paste ONE source configuration object, not just the response data. The same permissions, host allowlist and source validation apply. No provider request is made when saving.</div><p class="caption">Required: name, mode. Static: data. Proxy: url, param, example_value, response_format (wrapped/original). Optional: plans, price, billing_currency, enabled, trial_enabled, starter_enabled. An existing id edits that shared source. Put fixed response JSON inside data. Never paste bot tokens or platform credentials.</p><div class="field"><label for="source_config_json">Source configuration JSON</label><textarea id="source_config_json" name="source_json" rows="18" maxlength="65536" spellcheck="false" required>${esc(JSON.stringify(sample,null,2))}</textarea></div>${formEnd('Validate & save source')}`,async f=>{await req('/manage/admin/catalog_json',{source_json:f.elements.source_json.value});closeModal();await refresh();toast('Source configuration saved.');});}
 function catalogModal(id){const c=S.catalog.find(c=>c.id===id)||{};modal(id?'Edit customer source':'Add source for customers',`<form id="modalform"><div class="notice">This is a SHARED SOURCE. Provider URL, input name and example changes affect bound endpoints. Plan/price changes affect new purchases, not existing plan contracts. To edit one customer’s quota/auth/expiry use Endpoints → Manage. Sensitive changes require owner approval or security confirmation according to policy. No external lookup is made by this form.</div>${sourceFields(c)}<div class="grid2">${currencyField(c.billing_currency)}${field('price','Legacy/default price · no plans',c.price??S.settings.default_api_price,'number')}</div><h3>Customer plans</h3><p class="caption">Add up to 8 coin plans. When plans exist, customers must choose one. Purchased limits/price are saved; later edits apply only to new purchases. Daily cap and optional total cap both apply. Renewal adds the saved days and total budget without resetting usage.</p><div id="planrows">${(c.plans||[]).map(p=>planRow(p)).join('')}</div>${button('addplanrow','+ Add plan')}<div class="divider"></div><p class="caption">Query name and example are independent for each source. Price changes apply to newly created APIs; existing APIs retain their renewal price.</p><label class="checklabel"><input type="checkbox" name="enabled" ${c.enabled!==false?'checked':''}> Enabled for user subscriptions</label><label class="checklabel"><input type="checkbox" name="trial_enabled" ${c.trial_enabled?'checked':''}> Explicitly allow short demo access to THIS source</label><label class="checklabel"><input type="checkbox" name="starter_enabled" ${c.starter_enabled?'checked':''}> Allow the separate free starter API on this source</label><p class="caption">Off by default. Turning this off also stops active trial keys; paid subscriptions are unaffected.</p>${formEnd()}${id?`<div class="divider"></div><button class="danger" data-action="deletecatalog" data-id="${esc(id)}">Delete source</button>`:''}`,async f=>{await req('/manage/admin/catalog',{...sourceData(f),plans:readPlans(f),id,price:+f.elements.price.value,enabled:f.elements.enabled.checked,trial_enabled:f.elements.trial_enabled.checked,starter_enabled:f.elements.starter_enabled.checked});closeModal();await refresh();toast('Catalogue saved.')});syncMode()}
 function userModal(id){const u=S.users.find(x=>x.id===id);modal('Manage member',`<form id="modalform"><div class="notice">${esc(u.name)} · ${esc(u.id)}</div>${isSuper()?`<div class="field"><label>Role</label><select name="role"><option value="user" ${u.role==='user'?'selected':''}>User</option><option value="admin" ${u.role==='admin'?'selected':''}>Admin</option></select></div>${field('coins','Coin balance',u.coins,'number')}${field('diamonds','Diamond balance',u.diamonds,'number')}<p class="caption">Balance adjustments are owner-only, audited and require fresh confirmation. Negative refund debts should be reconciled, not silently erased.</p>`:''}<label class="checklabel"><input name="blocked" type="checkbox" ${u.blocked?'checked':''}> Suspend account and its API access</label>${formEnd()}${isSuper()?`<div class="divider"></div><p class="caption">Deletion requires removing owned APIs first. A blocked tombstone is retained to prevent repeat referral rewards.</p><button class="danger" data-action="deleteuser" data-id="${esc(id)}">Delete account</button>`:''}`,async f=>{let d={id,blocked:f.elements.blocked.checked};if(isSuper()){d.role=f.elements.role.value;d.coins=+f.elements.coins.value;d.diamonds=+f.elements.diamonds.value}await req('/manage/admin/user',d);closeModal();await refresh();toast('Member updated.')})}
 function kvModal(key){modal(key?'Edit record':'Add JSON record',`<form id="modalform">${field('key','Record key',key||'')}${area('value','JSON value',key?S.kv[key]:{})}${formEnd()}${key?`<div class="divider"></div><button class="danger" data-action="deletekv" data-id="${esc(key)}">Delete record</button>`:''}`,async f=>{await req('/manage/admin/kv',{key:f.elements.key.value,value:JSON.parse(f.elements.value.value)});closeModal();await refresh();toast('Record saved.')});if(key)$('#f_key').readOnly=true}
@@ -5433,7 +5308,7 @@ async function handleAction(action,id){
  else if(action==='newredeem'){modal('Create redeem code',`<form id="modalform"><div class="notice">A gift code grants coins once per registered eligible user, up to your cap.</div>${field('coins','Coins per user',50,'number')}${field('uses','Maximum users',1,'number')}${field('days','Valid days',7,'number')}${formEnd('Create code')}`,async f=>{const r=await req('/manage/admin/redeem',{coins:+f.elements.coins.value,uses:+f.elements.uses.value,days:+f.elements.days.value});await refresh();modal('Save your redeem code',`<div class="notice warn">Shown once. Save privately before closing.</div><pre id="newgiftcode" class="callcode">${esc(r.code)}</pre>${button('copygift','Copy code',true)}<p>Record: <code>${esc(r.id)}</code></p><p>${r.coins} coins · ${r.uses} users · expires ${date(r.expires)}</p>${button('closemodal','Done')}`)});}
  else if(action==='copygift'){await copy($('#newgiftcode').textContent);}
  else if(action==='credituser'){modal('Add user coins',`<form id="modalform"><div class="notice">Owner adjustment, not automatic proof of payment. Reusing the same reference will not credit twice.</div>${field('uid','Registered Telegram user ID','','text')}${field('coins','Coins to add',50,'number')}${field('reference','Unique adjustment reference','','text','Example: bonus_oct01_user123')}${formEnd('Review and credit')}`,async f=>{if(!confirm('Credit '+f.elements.coins.value+' coins to '+f.elements.uid.value+'?'))return;const r=await req('/manage/admin/credit',{uid:f.elements.uid.value.trim(),coins:+f.elements.coins.value,reference:f.elements.reference.value.trim()});closeModal();await refresh();toast(r.message)});}
- else if(action==='previewsource'){previewSource(id);}else if(action==='opencatalog'){closeModal();view='catalog';nav();render();}else if(action==='openhostsettings'){closeModal();view='settings';nav();render();}else if(action==='openoperations'){closeModal();view='operations';nav();render();}else if(action==='opendocs'){view='docs';nav();render();}else if(action==='refresh'){await refresh();toast('Workspace refreshed.')}else if(action==='logout'){await req('/logout',{});location.reload()}else if(action==='switchdemo'){await req('/demo-login',{role:S.me.role==='user'?'admin':'user'});location.reload()}else if(action==='closemodal')closeModal();else if(action==='copyref')await copy(S.referral_url);else if(action==='create')createModal();else if(action==='fromcatalog')createModal(id);else if(action==='apiedit')editApi(id);else if(action==='copyreadyurl')await copy($('#f_readyurl').value);else if(action==='copynewkey')await copy($('#f_newkey').value);else if(action==='copyendpoint')await copy(location.origin+'/api/'+id);else if(action==='newdemosource'){catalogModal();$('#modaltitle').textContent='Add safe demo JSON source';$('#f_name').value='Demo JSON';$('#f_data').value=JSON.stringify({status:'success',service:'SR DARK',message:'Your API is working. This is sample data.'},null,2);$('#modalbody input[name="trial_enabled"]').checked=true;}else if(action==='newcatalogjson')catalogJsonModal();else if(action==='editcatalogjson')catalogJsonModal(id);else if(action==='newcatalog')catalogModal();else if(action==='editcatalog')catalogModal(id);else if(action==='edituser')userModal(id);else if(action==='newkv')kvModal();else if(action==='editkv')kvModal(id);
+ else if(action==='previewsource'){previewSource(id);}else if(action==='opencatalog'){closeModal();view='catalog';nav();render();}else if(action==='openhostsettings'){closeModal();view='settings';nav();render();}else if(action==='openoperations'){closeModal();view='operations';nav();render();}else if(action==='opendocs'){view='docs';nav();render();}else if(action==='refresh'){await refresh();toast('Workspace refreshed.')}else if(action==='logout'){await req('/logout',{});location.reload()}else if(action==='switchdemo'){await req('/demo-login',{role:S.me.role==='user'?'admin':'user'});location.reload()}else if(action==='closemodal')closeModal();else if(action==='copyref')await copy(S.referral_url);else if(action==='create')createModal();else if(action==='fromcatalog')createModal(id);else if(action==='apiedit')editApi(id);else if(action==='copyreadyurl')await copy($('#f_readyurl').value);else if(action==='copynewkey')await copy($('#f_newkey').value);else if(action==='copyendpoint')await copy(location.origin+'/api/'+id);else if(action==='newdemosource'){catalogModal();$('#modaltitle').textContent='Add safe demo JSON source';$('#f_name').value='Demo JSON';$('#f_data').value=JSON.stringify({status:'success',service:'SR DARK',message:'Your API is working. This is sample data.'},null,2);$('#modalbody input[name="trial_enabled"]').checked=true;}else if(action==='newcatalog')catalogModal();else if(action==='editcatalog')catalogModal(id);else if(action==='edituser')userModal(id);else if(action==='newkv')kvModal();else if(action==='editkv')kvModal(id);
 
  else if(action==='revokeothers'||action==='revokesession'){if(!confirm('Sign out the selected other browser session(s)?'))return;const r=await req('/manage/security/revoke',{id:action==='revokeothers'?'others':id});await refresh();toast(r.message)}
  else if(action==='dailybroadcast'){campaignModal();$('#modaltitle').textContent='Daily broadcast · review before enabling';$('#f_name').value='Daily API news';$('#f_min_hours').value=24;$('#f_max_hours').value=24;$('#campaign_text').value='Hi {name} 💙\nAPI tip: keep your personal key private and check usage before making requests. Open My APIs below to manage your endpoints. New here? Try your one-time API trial.\nHave a question? Use /help or /paysupport in this bot.';}
