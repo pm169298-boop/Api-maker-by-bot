@@ -101,7 +101,7 @@ CONFIG = {
     "BOOTSTRAP_V4171_CHAT_URLS": True,'BOOTSTRAP_V4151_EMOJI': True,
  'BOOTSTRAP_V415_CONTROLS': True,
  'AUTO_WORKER': True,
- 'LOCK_OWNER_CONFIG': True,
+ 'LOCK_OWNER_CONFIG': False,
  'PROXY_KEEPALIVE': True,
  'BOOTSTRAP_V414_SAFE_DELIVERY': True,
  'BOOTSTRAP_DASHBOARD_WELCOME': True,
@@ -109,29 +109,22 @@ CONFIG = {
  'TELEGRAM_WEBHOOK_CONNECTIONS': 4,
  'FIREBASE_ALLOW_SHARED_ACCOUNT': True,
  'FIREBASE_ACCESS_MODE': 'rest',
- 'FIREBASE_BACKEND_EMAIL': 'Droid@gmail.com',
- 'FIREBASE_BACKEND_PASSWORD': 'Droid0602',
- 'FIREBASE_BACKEND_UID': '1egET0mDQXSXj2u5ZZxgxZlW3vd2',
- 'BOT_TOKEN': '8351652662:AAE9kOGIU4m4QrJ7ixyc8n_4HpxDhY-KJ0s',
- 'BOT_USERNAME': 'SR_free_api_bot',
- 'SUPER_ADMIN_IDS': '8987478830',
- 'BASE_URL': 'https://api-maker-by-bot.onrender.com',
- 'SECRET_KEY': 'e7f5_cRfQ2CnMF4-pSuRBw4BzZfOnSD-IrfEIBzHFzad8_RA3l1g_EofHQcL4LKU',
- 'WEBHOOK_SECRET': 'FC-LGiosyjGNkGqif0RM62wWfSpQHg2Oo0qfoip9FKVtQ1A4YDjK2VwY35YSn1Ds',
- 'CRON_SECRET': 'GUUCUEN7PJ6MajZDLJzzON4LwUo-vW1BBSL0zU3WGoe-1gcDAuispkz58otXe-87',
- 'FIREBASE_PROJECT_ID': 'vps-bot-api-makerbckup',
- 'FIREBASE_WEB_CONFIG': {'apiKey': 'AIzaSyAlibQoi962M_JrsP-iVKHHl6K2bSbj8S4',
-                         'authDomain': 'vps-bot-api-makerbckup.firebaseapp.com',
-                         'databaseURL': 'https://vps-bot-api-makerbckup-default-rtdb.asia-southeast1.firebasedatabase.app',
-                         'projectId': 'vps-bot-api-makerbckup',
-                         'storageBucket': 'vps-bot-api-makerbckup.firebasestorage.app',
-                         'messagingSenderId': '302260354275',
-                         'appId': '1:302260354275:web:ae0ad26df6f5154f7419d6',
-                         'measurementId': 'G-5Y0LEE2HPJ'},
- 'INITIAL_LOG_CHANNEL': '-1004358894107',
- 'FIREBASE_DATABASE_URL': 'https://vps-bot-api-makerbckup-default-rtdb.asia-southeast1.firebasedatabase.app',
- 'FIREBASE_WEB_API_KEY': 'AIzaSyAlibQoi962M_JrsP-iVKHHl6K2bSbj8S4',
- 'FIREBASE_SUPER_ADMIN_UIDS': '1egET0mDQXSXj2u5ZZxgxZlW3vd2',
+ 'FIREBASE_BACKEND_EMAIL': '',
+ 'FIREBASE_BACKEND_PASSWORD': '',   # env FIREBASE_BACKEND_PASSWORD
+ 'FIREBASE_BACKEND_UID': '',
+ 'BOT_TOKEN': '',   # env BOT_TOKEN se aata hai (file me secret kabhi mat rakho)
+ 'BOT_USERNAME': '',
+ 'SUPER_ADMIN_IDS': '',
+ 'BASE_URL': '',
+ 'SECRET_KEY': '',   # env SECRET_KEY
+ 'WEBHOOK_SECRET': '',   # env WEBHOOK_SECRET
+ 'CRON_SECRET': '',   # env CRON_SECRET
+ 'FIREBASE_PROJECT_ID': '',
+ 'FIREBASE_WEB_CONFIG': '',  # env FIREBASE_WEB_CONFIG (JSON string)
+ 'INITIAL_LOG_CHANNEL': '',
+ 'FIREBASE_DATABASE_URL': '',
+ 'FIREBASE_WEB_API_KEY': '',
+ 'FIREBASE_SUPER_ADMIN_UIDS': '',
  'FIREBASE_ADMIN_UIDS': '',
  'FIREBASE_SERVICE_ACCOUNT': '/etc/secrets/firebase-service-account.json',
  'FIREBASE_NAMESPACE': 'srdark_v4',
@@ -142,7 +135,7 @@ CONFIG = {
  'S3_ACCESS_KEY': '',
  'S3_SECRET_KEY': '',
  'BACKUP_DIR': 'data/backups',
- 'BACKUP_KEY': 'YQMBxEzc6rMCsaaPv4KwVI9CI_bbKY5PFRHR6CGm7to=',
+ 'BACKUP_KEY': '',  # env BACKUP_KEY (purane backups ke liye purani key)
  'HTTP_API_RPM': 180,
  'HTTP_GLOBAL_RPM': 1200,
  'TRUST_PROXY_HOPS': 0,
@@ -303,9 +296,7 @@ def normalize(s):
     if (flag is True or str(flag).lower() in ('1','true','yes')) and not s['system'].get('v4181_community_plan'):
         # New purchases only; never rewrite issued keys, subscriptions, claims or balances.
         s['settings'].update(default_api_price=250,valid_days=20,daily_limit=250,
-            force_join_channels=[
-                {'chat_id':'-1003975405346','title':'Security Research Zone','url':'https://t.me/SRZoneOfficial'},
-                {'chat_id':'-1003958711358','title':'SR DARK LAB','url':'https://t.me/+_7Axv0l2tzw2YjQ1'}])
+            force_join_channels=[])   # data blank — channels state se aayenge (panel)
         # Apply the standard offer only to existing static/safe-validation catalogue sources.
         # No third-party lookup URL, provider credential, or external lookup is added here.
         for src in s['catalog'].values():
@@ -2726,13 +2717,26 @@ def joined(s,uid):
     return proof.get('revision')==join_revision(s) and proof.get('until',0)>now()
 
 def join_menu(s):
-    rows=[[btn('Join '+c['title'],url=c['url'])] for c in s['settings']['force_join_channels']]
-    return '*💙 One step to continue*\n\n'+md('Join ALL channels below, then tap Verify all joins.\nIf your join request is still pending, approve it first.'),rows+[[btn('✓ Verify all joins','verifyjoin','success')],[btn('Help','help'),btn('My ID','id')]]
+    chans=s['settings'].get('force_join_channels') or []
+    # Buttons: sirf `style` (Telegram actual colour: primary/success) — premium icon
+    # enqueue khud lagata hai (icon_custom_emoji_id) + reject par auto fallback.
+    # Text me emoji prefix BILKUL nahi.
+    rows=[[btn('Join '+c['title'],url=c['url'],style='primary')] for c in chans]
+    rows.append([btn('Verify my joins','verifyjoin',style='success')])
+    rows.append([btn('Help','help'),btn('My ID','id')])
+    body='\n\n'.join(md(str(i)+'. '+c['title']) for i,c in enumerate(chans,1)) if chans else ''
+    text=('*\U0001f4a0 *Access required*\n\n'
+          +md('Join all the channels below, then tap Verify my joins.')+'\n'
+          +md('The bot checks your membership automatically in the background — no refresh needed.')
+          +(('\n\n'+body) if body else '')
+          +'\n\n'+md('Already joined? Tap verify once — the dashboard opens by itself.'))
+    return text,rows
 
 def request_join(s,uid):
     u=actor(s,uid);require(str(uid).isdigit(),'Use your Telegram account for membership verification.')
-    require(u.get('last_join_check',0)+15<=now(),'Wait 15 seconds before checking again.',429)
-    require(not any(v.get('kind')=='joincheck' and v['chat']==str(uid) for v in s['outbox'].values()),'Verification already queued.')
+    require(u.get('last_join_check',0)+5<=now(),'Hold on — checking again in a few seconds.',429)
+    if any(v.get('kind')=='joincheck' and v['chat']==str(uid) for v in s['outbox'].values()):
+        return 'Join check is already running — keep this chat open. The result will appear here in a moment.'
     if not s['settings']['force_join_channels']:
         return activate(s,uid)
     require(sum(v.get('kind')=='joincheck' for v in s['outbox'].values())<100 and len(s['outbox'])<1900,'Verification busy; retry shortly.',503)
@@ -2759,7 +2763,7 @@ def join_finish(s,k,v,result):
         s['outbox'].pop(k,None);return
     if not result['joined']:
         u.pop('join_proof',None);s['outbox'].pop(k,None)
-        text,rows=join_menu(s);soft_message(s,v['chat'],md('Not joined: '+result['title'])+'\n\n'+text,rows)
+        text,rows=join_menu(s);soft_message(s,v['chat'],md('Still not verified — '+result['title'])+'\n\n'+text,rows)
         return
     if result['index']+1<len(s['settings']['force_join_channels']):
         current.update(index=result['index']+1,lease=0,next=now()+1,tries=0);return
@@ -3951,15 +3955,15 @@ def process_bot(s,update):
     checkpoint=copy.deepcopy(s)
     try:
         if not is_admin(uid,s) and not joined(s,uid) and action not in (('id','help','verifyjoin','paysupport','contacthelp') if focused_ui(s) else ('id','help','verifyjoin')):
-            if first=='/start':
-                # Automatic detect: turant membership check — joined hai to seedha
-                # dashboard aayega (join_finish), nahi hai to join menu (fail path).
-                try:
-                    request_join(s,uid);return True      # silent — koi extra message nahi
-                except Problem: pass                     # throttle/busy → menu fallback
+            # Andar-chup-ke auto-check — HAR command par (sirf /start nahi):
+            # pending/queued → SILENT (koi flash nahi); check ka result join_finish
+            # khud bhejega: joined → dashboard (start command), nahi → force-join panel.
+            pending=any(v.get('kind')=='joincheck' and v['chat']==str(uid) for v in s['outbox'].values())
+            if pending:return True                       # check chal raha — wait silently
+            try:
+                request_join(s,uid);return True          # silent membership check queue
+            except Problem: pass                         # abhi check hua → neeche panel
             text,rows=join_menu(s)
-            if first=='/start':
-                welcome_enqueue(s,uid,keyboard=rows);return True
             key=enqueue(s,uid,text,rows,kind='photo' if s['settings']['welcome_photo'] else 'message')
             s['outbox'][key]['priority']=-1
             if s['settings']['welcome_photo']:s['outbox'][key]['photo']=s['settings']['welcome_photo']
